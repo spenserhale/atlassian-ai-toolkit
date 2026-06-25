@@ -1,0 +1,22 @@
+{
+  "name": "@atlassian-ai-toolkit/mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build ./src/index.ts --outdir ./dist --target node --external effect --external sury --external arktype --external valibot --external @valibot/to-json-schema",
+    "inspect": "npx fastmcp inspect src/index.ts",
+    "test": "bun test",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@atlassian-ai-toolkit/sdk": "workspace:*",
+    "fastmcp": "^3.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/bun": "latest"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "atlassian-ai-toolkit",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "bun run --filter '*' build",
+    "dev:mcp": "bun run --filter '@atlassian-ai-toolkit/mcp' dev",
+    "dev:cli": "bun run --filter '@atlassian-ai-toolkit/cli' dev",
+    "test": "bun run --filter '*' test",
+    "lint": "bun run --filter '*' lint",
+    "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/bun": "latest"
+  }
+}
