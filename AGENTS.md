@@ -39,9 +39,9 @@ Use Atlassian Cloud Basic auth with `ATLASSIAN_EMAIL` and `ATLASSIAN_API_TOKEN`.
 
 Destructive operations require explicit safeguards:
 
-- Jira issue deletion is permanent. CLI commands must dry-run by default and require `--force` for actual deletion.
-- Confluence page deletion moves to trash by default. Permanent purge must be a separate explicit option and require `--force`.
-- MCP destructive tools should require an explicit `force: true` parameter and should not be registered until the tool contract includes a safe preview path.
+- Jira issue deletion is permanent. CLI commands must preview by default and require `--force --confirm <issue-key-or-id>` for actual deletion.
+- Confluence page deletion moves to trash by default. Permanent purge must be a separate explicit option and require `--force --confirm <page-id>`.
+- MCP destructive tools must preview by default and require `force: true` plus a matching `confirm` field before calling the SDK delete method.
 
 ## Done Criteria
 

@@ -4,6 +4,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "build": "bun run --filter '*' build",
+    "build:cli:binaries": "bun run --filter '@atlassian-ai-toolkit/cli' build:darwin-arm64 && bun run --filter '@atlassian-ai-toolkit/cli' build:darwin-x64 && bun run --filter '@atlassian-ai-toolkit/cli' build:linux-arm64 && bun run --filter '@atlassian-ai-toolkit/cli' build:linux-x64 && bun run --filter '@atlassian-ai-toolkit/cli' build:windows-x64",
     "dev:mcp": "bun run --filter '@atlassian-ai-toolkit/mcp' dev",
     "dev:cli": "bun run --filter '@atlassian-ai-toolkit/cli' dev",
     "test": "bun run --filter '*' test",

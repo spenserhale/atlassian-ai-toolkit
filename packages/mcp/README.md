@@ -7,7 +7,9 @@ MCP server for Atlassian Cloud, built with [FastMCP](https://github.com/punkpeye
 | Tool | Description |
 |------|-------------|
 | `jira_get_issue` | Get a Jira issue by key or ID |
+| `jira_delete_issue` | Preview or delete a Jira issue with `force` + `confirm` |
 | `confluence_get_page` | Get a Confluence page by ID |
+| `confluence_delete_page` | Preview, trash, or purge a Confluence page with `force` + `confirm` |
 
 ## Setup with Claude Desktop
 
