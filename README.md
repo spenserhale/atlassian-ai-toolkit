@@ -24,13 +24,13 @@ No Node.js, no npm, no PATH conflicts. One file built with Bun.
 curl -fsSL https://raw.githubusercontent.com/spenserhale/atlassian-ai-toolkit/main/scripts/install.sh | sh
 ```
 
-The script detects your OS + architecture, downloads the matching binary from the latest release, verifies its SHA256, and installs to `$HOME/.local/bin/atlassian-ai`.
+The script detects your OS + architecture, downloads the matching binary from the latest release, verifies its SHA256, and installs to `$HOME/.local/bin/atlassian`.
 
 Pin a version with `ATLASSIAN_AI_TOOLKIT_VERSION=v0.1.0` or change the install directory with `ATLASSIAN_AI_TOOLKIT_INSTALL=$HOME/bin`.
 
-**Windows:** download `atlassian-ai-windows-x64.exe` from the [latest release](https://github.com/spenserhale/atlassian-ai-toolkit/releases/latest) and put it on your `PATH`.
+**Windows:** download `atlassian-windows-x64.exe` from the [latest release](https://github.com/spenserhale/atlassian-ai-toolkit/releases/latest) and put it on your `PATH`.
 
-Available binaries: `atlassian-ai-linux-{x64,arm64}`, `atlassian-ai-darwin-{x64,arm64}`, and `atlassian-ai-windows-x64.exe`.
+Available binaries: `atlassian-linux-{x64,arm64}`, `atlassian-darwin-{x64,arm64}`, and `atlassian-windows-x64.exe`.
 
 ## Configure
 
@@ -50,19 +50,19 @@ Deletes preview by default. Actual deletion requires `--force` and a matching `-
 
 ```sh
 # Preview the permanent Jira delete
-atlassian-ai jira delete PROJ-123
+atlassian jira delete PROJ-123
 
 # Permanently delete the Jira issue
-atlassian-ai jira delete PROJ-123 --force --confirm PROJ-123
+atlassian jira delete PROJ-123 --force --confirm PROJ-123
 
 # Preview moving a Confluence page to trash
-atlassian-ai confluence delete 123456
+atlassian confluence delete 123456
 
 # Move a Confluence page to trash
-atlassian-ai confluence delete 123456 --force --confirm 123456
+atlassian confluence delete 123456 --force --confirm 123456
 
 # Permanently purge an already-trashed Confluence page
-atlassian-ai confluence delete 123456 --purge --force --confirm 123456
+atlassian confluence delete 123456 --purge --force --confirm 123456
 ```
 
 ## Getting Started From Source

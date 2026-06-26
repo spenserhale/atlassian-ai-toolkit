@@ -35,8 +35,8 @@ const routes = buildRouteMap({
 });
 
 export const app = buildApplication(routes, {
-  name: "atlassian-ai",
+  name: "atlassian",
   versionInfo: {
-    currentVersion: "0.1.0",
+    currentVersion: "0.1.1",
   },
 });

@@ -68,15 +68,15 @@ jobs:
       matrix:
         include:
           - target: bun-linux-x64
-            asset: atlassian-ai-linux-x64
+            asset: atlassian-linux-x64
           - target: bun-linux-arm64
-            asset: atlassian-ai-linux-arm64
+            asset: atlassian-linux-arm64
           - target: bun-darwin-x64
-            asset: atlassian-ai-darwin-x64
+            asset: atlassian-darwin-x64
           - target: bun-darwin-arm64
-            asset: atlassian-ai-darwin-arm64
+            asset: atlassian-darwin-arm64
           - target: bun-windows-x64
-            asset: atlassian-ai-windows-x64.exe
+            asset: atlassian-windows-x64.exe
     steps:
       - name: Checkout
         uses: actions/checkout@v4

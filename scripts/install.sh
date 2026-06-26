@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Install the atlassian-ai-toolkit CLI by downloading the latest prebuilt binary
+# Install the atlassian CLI by downloading the latest prebuilt binary
 # from GitHub Releases.
 #
 # Usage:
@@ -32,7 +32,7 @@ detect_platform() {
 }
 
 platform=$(detect_platform)
-asset="atlassian-ai-${platform}"
+asset="atlassian-${platform}"
 
 if [ "$VERSION" = "latest" ]; then
   url="https://github.com/${REPO}/releases/latest/download/${asset}"
@@ -56,12 +56,12 @@ echo "Verifying checksum..."
 }
 
 mkdir -p "$INSTALL_DIR"
-install_path="$INSTALL_DIR/atlassian-ai"
+install_path="$INSTALL_DIR/atlassian"
 mv "$tmp/$asset" "$install_path"
 chmod +x "$install_path"
 
 echo ""
-echo "Installed atlassian-ai to $install_path"
+echo "Installed atlassian to $install_path"
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *)
@@ -71,4 +71,4 @@ case ":$PATH:" in
     ;;
 esac
 echo ""
-echo "Run 'atlassian-ai --help' to get started."
+echo "Run 'atlassian --help' to get started."
