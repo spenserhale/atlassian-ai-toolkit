@@ -32,6 +32,17 @@ Pin a version with `ATLASSIAN_AI_TOOLKIT_VERSION=v0.1.0` or change the install d
 
 Available binaries: `atlassian-linux-{x64,arm64}`, `atlassian-darwin-{x64,arm64}`, and `atlassian-windows-x64.exe`.
 
+### Shell Aliases
+
+For shorter commands, add these aliases to your shell profile (`~/.zshrc` or `~/.bashrc`):
+
+```sh
+alias jira='atlassian jira'
+alias conf='atlassian confluence'
+```
+
+Then `jira get PROJ-123` runs `atlassian jira get PROJ-123`, and `conf get 123456` runs `atlassian confluence get 123456`.
+
 ## Configure
 
 Set Atlassian Cloud credentials in your shell:

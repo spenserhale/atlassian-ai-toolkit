@@ -50,7 +50,12 @@ curl -fsSL -o "$tmp/$asset" "$url"
 curl -fsSL -o "$tmp/$asset.sha256" "$checksum_url"
 
 echo "Verifying checksum..."
-(cd "$tmp" && shasum -a 256 -c "$asset.sha256") || {
+if command -v sha256sum >/dev/null 2>&1; then
+  checksum_cmd="sha256sum"
+else
+  checksum_cmd="shasum -a 256"
+fi
+(cd "$tmp" && $checksum_cmd -c "$asset.sha256") || {
   echo "Checksum verification failed"
   exit 1
 }
@@ -72,3 +77,7 @@ case ":$PATH:" in
 esac
 echo ""
 echo "Run 'atlassian --help' to get started."
+echo ""
+echo "Optional: add short aliases to your shell profile:"
+echo "  alias jira='atlassian jira'"
+echo "  alias conf='atlassian confluence'"
