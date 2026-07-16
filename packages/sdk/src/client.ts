@@ -1,10 +1,25 @@
 import {
   AtlassianConfigSchema,
   AtlassianErrorResponseSchema,
+  ConfluenceAttachmentUploadResultSchema,
   ConfluencePageSchema,
   JiraIssueSchema,
+  JiraSprintListSchema,
+  JiraSprintSchema,
 } from "./types.js";
-import type { AtlassianConfig, ConfluencePage, JiraIssue } from "./types.js";
+import type {
+  AtlassianConfig,
+  ConfluenceAttachmentUploadInput,
+  ConfluenceAttachmentUploadResult,
+  ConfluencePage,
+  CreateJiraSprintInput,
+  JiraIssue,
+  JiraSprint,
+  JiraSprintList,
+  JiraSprintListOptions,
+  MoveJiraSprintIssuesInput,
+  UpdateJiraSprintInput,
+} from "./types.js";
 import {
   AtlassianAuthError,
   AtlassianError,
@@ -15,8 +30,14 @@ import {
 type QueryValue = string | number | boolean | undefined;
 
 interface RequestOptions {
-  readonly body?: unknown;
+  readonly body?: BodyInit | unknown;
+  readonly headers?: Record<string, string>;
   readonly query?: Record<string, QueryValue>;
+}
+
+function requireNonEmpty(value: string, label: string): string {
+  if (value.trim().length === 0) throw new Error(`${label} is required`);
+  return value;
 }
 
 export class AtlassianClient {
@@ -42,13 +63,15 @@ export class AtlassianClient {
     const headers: Record<string, string> = {
       Accept: "application/json",
       Authorization: this.authHeader(),
+      ...opts.headers,
     };
-    if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+    const isFormData = opts.body instanceof FormData;
+    if (opts.body !== undefined && !isFormData) headers["Content-Type"] = "application/json";
 
     const res = await fetch(this.buildUrl(path, opts.query), {
       method,
       headers,
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      body: isFormData ? opts.body : opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
 
     if (!res.ok) await this.throwForResponse(res);
@@ -87,6 +110,36 @@ export class AtlassianClient {
     });
   }
 
+  async getJiraSprint(sprintId: string | number): Promise<JiraSprint> {
+    const data = await this.request<unknown>("GET", `/rest/agile/1.0/sprint/${encodeURIComponent(String(sprintId))}`);
+    return JiraSprintSchema.parse(data);
+  }
+
+  async listJiraSprints(boardId: string | number, opts: JiraSprintListOptions = {}): Promise<JiraSprintList> {
+    const data = await this.request<unknown>("GET", `/rest/agile/1.0/board/${encodeURIComponent(String(boardId))}/sprint`, {
+      query: { state: opts.state },
+    });
+    return JiraSprintListSchema.parse(data);
+  }
+
+  async createJiraSprint(input: CreateJiraSprintInput): Promise<JiraSprint> {
+    const data = await this.request<unknown>("POST", "/rest/agile/1.0/sprint", { body: input });
+    return JiraSprintSchema.parse(data);
+  }
+
+  async updateJiraSprint(sprintId: string | number, input: UpdateJiraSprintInput): Promise<JiraSprint> {
+    const data = await this.request<unknown>("POST", `/rest/agile/1.0/sprint/${encodeURIComponent(String(sprintId))}`, { body: input });
+    return JiraSprintSchema.parse(data);
+  }
+
+  async moveJiraSprintIssues(input: MoveJiraSprintIssuesInput): Promise<void> {
+    const path = "targetSprintId" in input
+      ? `/rest/agile/1.0/sprint/${encodeURIComponent(String(input.targetSprintId))}/issue`
+      : "/rest/agile/1.0/backlog/issue";
+
+    await this.request<void>("POST", path, { body: { issues: input.issueKeys } });
+  }
+
   async getConfluencePage(pageId: string): Promise<ConfluencePage> {
     const data = await this.request<unknown>("GET", `/wiki/api/v2/pages/${encodeURIComponent(pageId)}`);
     return ConfluencePageSchema.parse(data);
@@ -96,5 +149,24 @@ export class AtlassianClient {
     await this.request<void>("DELETE", `/wiki/api/v2/pages/${encodeURIComponent(pageId)}`, {
       query: { purge: opts.purge },
     });
+  }
+
+  async uploadConfluenceAttachment(pageId: string, input: ConfluenceAttachmentUploadInput): Promise<ConfluenceAttachmentUploadResult> {
+    const validPageId = requireNonEmpty(pageId, "pageId");
+    const filename = requireNonEmpty(input.filename, "filename");
+    const body = new FormData();
+    body.set("file", input.file, filename);
+    body.set("minorEdit", String(input.minorEdit ?? true));
+    if (input.comment !== undefined) body.set("comment", input.comment);
+
+    const data = await this.request<unknown>(
+      input.createOnly ? "POST" : "PUT",
+      `/wiki/rest/api/content/${encodeURIComponent(validPageId)}/child/attachment`,
+      {
+        body,
+        headers: { "X-Atlassian-Token": "nocheck" },
+      }
+    );
+    return ConfluenceAttachmentUploadResultSchema.parse(data);
   }
 }

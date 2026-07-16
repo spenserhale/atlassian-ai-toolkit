@@ -6,10 +6,30 @@ export {
   AtlassianNotFoundError,
   AtlassianRateLimitError,
 } from "./errors.js";
-export type { AtlassianConfig, AtlassianErrorResponse, ConfluencePage, JiraIssue } from "./types.js";
+export type {
+  AtlassianConfig,
+  AtlassianErrorResponse,
+  ConfluenceAttachment,
+  ConfluenceAttachmentUploadInput,
+  ConfluenceAttachmentUploadResult,
+  ConfluencePage,
+  CreateJiraSprintInput,
+  JiraIssue,
+  JiraSprint,
+  JiraSprintList,
+  JiraSprintListOptions,
+  JiraSprintState,
+  MoveJiraSprintIssuesInput,
+  UpdateJiraSprintInput,
+} from "./types.js";
 export {
   AtlassianConfigSchema,
   AtlassianErrorResponseSchema,
+  ConfluenceAttachmentSchema,
+  ConfluenceAttachmentUploadResultSchema,
   ConfluencePageSchema,
   JiraIssueSchema,
+  JiraSprintListSchema,
+  JiraSprintSchema,
+  JiraSprintStateSchema,
 } from "./types.js";
