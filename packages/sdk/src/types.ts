@@ -30,6 +30,20 @@ export const JiraIssueSchema = z.object({
 
 export type JiraIssue = z.infer<typeof JiraIssueSchema>;
 
+export const JiraAttachmentSchema = z.object({
+  id: z.string(),
+  filename: z.string().optional(),
+  mimeType: z.string().optional(),
+  size: z.number().optional(),
+  created: z.string().optional(),
+  content: z.string().optional(),
+  self: z.string().optional(),
+}).passthrough();
+
+export type JiraAttachment = z.infer<typeof JiraAttachmentSchema>;
+
+export const JiraAttachmentListSchema = z.array(JiraAttachmentSchema);
+
 export const JiraSprintStateSchema = z.enum(["future", "active", "closed"]);
 
 export type JiraSprintState = z.infer<typeof JiraSprintStateSchema>;

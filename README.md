@@ -55,6 +55,28 @@ export ATLASSIAN_API_TOKEN="your-api-token"
 
 Create a scoped API token at <https://id.atlassian.com/manage-profile/security/api-tokens>.
 
+## Attachments
+
+Upload one or more files to a Jira issue. Repeat `--file` for multiple uploads; the stored filename is the file's basename and the MIME type is inferred from its extension.
+
+```sh
+# Attach a single file
+atlassian jira attach PROJ-123 --file ./screenshot.png
+
+# Attach several files and print the API response
+atlassian jira attach PROJ-123 --file ./error.log --file ./har-capture.har --json
+```
+
+The MCP tool `jira_add_attachment` takes the same `paths`, plus a `files` array for content an agent generates inline (`filename`, `content`, `encoding: utf8 | base64`).
+
+Confluence pages take one attachment per call:
+
+```sh
+atlassian confluence attachment upload --page 123456 --file ./diagram.png
+```
+
+Attachments must be enabled on the site, and uploads are subject to the site's maximum attachment size.
+
 ## Destructive Actions
 
 Deletes preview by default. Actual deletion requires `--force` and a matching `--confirm` value from the fetched resource.

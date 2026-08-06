@@ -3,6 +3,7 @@ import {
   AtlassianErrorResponseSchema,
   ConfluenceAttachmentUploadResultSchema,
   ConfluencePageSchema,
+  JiraAttachmentListSchema,
   JiraIssueSchema,
   JiraSprintListSchema,
   JiraSprintSchema,
@@ -13,6 +14,7 @@ import type {
   ConfluenceAttachmentUploadResult,
   ConfluencePage,
   CreateJiraSprintInput,
+  JiraAttachment,
   JiraIssue,
   JiraSprint,
   JiraSprintList,
@@ -20,6 +22,7 @@ import type {
   MoveJiraSprintIssuesInput,
   UpdateJiraSprintInput,
 } from "./types.js";
+import { guessContentType } from "./content-type.js";
 import {
   AtlassianAuthError,
   AtlassianError,
@@ -38,6 +41,27 @@ interface RequestOptions {
 function requireNonEmpty(value: string, label: string): string {
   if (value.trim().length === 0) throw new Error(`${label} is required`);
   return value;
+}
+
+/** One file to upload. `data` is raw bytes or text; `contentType` defaults to a guess from `filename`. */
+export interface JiraAttachmentUpload {
+  readonly filename: string;
+  readonly data: Blob | ArrayBuffer | Uint8Array | string;
+  readonly contentType?: string;
+}
+
+function toBlobPart(data: ArrayBuffer | Uint8Array | string): BlobPart {
+  if (typeof data === "string" || data instanceof ArrayBuffer) return data;
+  // Blob rejects views backed by a SharedArrayBuffer. Re-view the same bytes when it is a plain
+  // ArrayBuffer (no copy), and fall back to copying only for shared memory.
+  return data.buffer instanceof ArrayBuffer
+    ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+    : new Uint8Array(data);
+}
+
+function toBlob(file: JiraAttachmentUpload): Blob {
+  if (file.data instanceof Blob) return file.data;
+  return new Blob([toBlobPart(file.data)], { type: file.contentType ?? guessContentType(file.filename) });
 }
 
 export class AtlassianClient {
@@ -60,12 +84,15 @@ export class AtlassianClient {
   }
 
   private async request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
+    const isFormData = opts.body instanceof FormData;
     const headers: Record<string, string> = {
       Accept: "application/json",
       Authorization: this.authHeader(),
+      // Atlassian rejects multipart uploads without this XSRF opt-out header. Content-Type is
+      // left unset for them so fetch can add the multipart boundary itself.
+      ...(isFormData ? { "X-Atlassian-Token": "no-check" } : {}),
       ...opts.headers,
     };
-    const isFormData = opts.body instanceof FormData;
     if (opts.body !== undefined && !isFormData) headers["Content-Type"] = "application/json";
 
     const res = await fetch(this.buildUrl(path, opts.query), {
@@ -138,6 +165,25 @@ export class AtlassianClient {
       : "/rest/agile/1.0/backlog/issue";
 
     await this.request<void>("POST", path, { body: { issues: input.issueKeys } });
+  }
+
+  async addJiraAttachments(
+    issueIdOrKey: string,
+    files: readonly JiraAttachmentUpload[]
+  ): Promise<JiraAttachment[]> {
+    if (files.length === 0) {
+      throw new AtlassianError("At least one file is required to upload an attachment", "NO_FILES", 400, null);
+    }
+
+    const body = new FormData();
+    for (const file of files) body.append("file", toBlob(file), file.filename);
+
+    const data = await this.request<unknown>(
+      "POST",
+      `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/attachments`,
+      { body }
+    );
+    return JiraAttachmentListSchema.parse(data);
   }
 
   async getConfluencePage(pageId: string): Promise<ConfluencePage> {

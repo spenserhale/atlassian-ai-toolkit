@@ -1,5 +1,7 @@
 export { AtlassianClient } from "./client.js";
+export type { JiraAttachmentUpload } from "./client.js";
 export { resolveConfig } from "./config.js";
+export { guessContentType } from "./content-type.js";
 export {
   AtlassianAuthError,
   AtlassianError,
@@ -14,6 +16,7 @@ export type {
   ConfluenceAttachmentUploadResult,
   ConfluencePage,
   CreateJiraSprintInput,
+  JiraAttachment,
   JiraIssue,
   JiraSprint,
   JiraSprintList,
@@ -28,6 +31,8 @@ export {
   ConfluenceAttachmentSchema,
   ConfluenceAttachmentUploadResultSchema,
   ConfluencePageSchema,
+  JiraAttachmentListSchema,
+  JiraAttachmentSchema,
   JiraIssueSchema,
   JiraSprintListSchema,
   JiraSprintSchema,

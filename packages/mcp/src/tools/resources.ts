@@ -1,8 +1,9 @@
-import type { FastMCP } from "fastmcp";
 import { basename } from "node:path";
+import { readFile } from "node:fs/promises";
+import type { FastMCP } from "fastmcp";
 import { z } from "zod";
 import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
-import type { JiraSprintState, MoveJiraSprintIssuesInput } from "@atlassian-ai-toolkit/sdk";
+import type { JiraAttachmentUpload, JiraSprintState, MoveJiraSprintIssuesInput } from "@atlassian-ai-toolkit/sdk";
 
 function getClient(): AtlassianClient {
   const config = resolveConfig();
@@ -228,6 +229,52 @@ export function registerResourceTools(server: FastMCP) {
 
       await client.moveJiraSprintIssues(moveInput);
       return JSON.stringify({ status: "moved", sourceSprint: { id: sprint.id, name: sprint.name }, rollover: moveInput }, null, 2);
+    },
+  });
+
+  server.addTool({
+    name: "jira_add_attachment",
+    description:
+      "Upload file attachments to one Jira issue. Use paths for files already on disk, or files for content you generate inline.",
+    parameters: z.object({
+      issueIdOrKey: z.string().describe("Jira issue key or id"),
+      paths: z.array(z.string()).default([]).describe("Local file paths to upload"),
+      files: z
+        .array(
+          z.object({
+            filename: z.string().describe("Name to store the attachment under"),
+            content: z.string().describe("File content, encoded per the encoding field"),
+            encoding: z.enum(["utf8", "base64"]).default("utf8").describe("Encoding of content"),
+            contentType: z.string().optional().describe("MIME type; guessed from filename when omitted"),
+          })
+        )
+        .default([])
+        .describe("Inline files to upload"),
+    }),
+    execute: async (args) => {
+      const fromPaths: JiraAttachmentUpload[] = await Promise.all(
+        args.paths.map(async (path) => ({ filename: basename(path), data: await readFile(path) }))
+      );
+      const fromInline: JiraAttachmentUpload[] = args.files.map((file) => ({
+        filename: file.filename,
+        contentType: file.contentType,
+        data: file.encoding === "base64" ? Buffer.from(file.content, "base64") : file.content,
+      }));
+      const uploads = [...fromPaths, ...fromInline];
+
+      if (uploads.length === 0) {
+        return JSON.stringify({
+          status: "no_files",
+          hint: "Provide at least one entry in paths or files.",
+        }, null, 2);
+      }
+
+      const attachments = await getClient().addJiraAttachments(args.issueIdOrKey, uploads);
+      return JSON.stringify({
+        status: "uploaded",
+        issue: args.issueIdOrKey,
+        attachments: attachments.map((a) => ({ id: a.id, filename: a.filename, size: a.size, mimeType: a.mimeType })),
+      }, null, 2);
     },
   });
 
