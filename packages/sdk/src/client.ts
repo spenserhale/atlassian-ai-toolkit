@@ -5,6 +5,8 @@ import {
   ConfluencePageSchema,
   JiraAttachmentListSchema,
   JiraIssueSchema,
+  JiraSearchPageSchema,
+  JiraSprintIssuePageSchema,
   JiraSprintListSchema,
   JiraSprintSchema,
 } from "./types.js";
@@ -16,7 +18,11 @@ import type {
   CreateJiraSprintInput,
   JiraAttachment,
   JiraIssue,
+  JiraSearchOptions,
+  JiraSearchResult,
   JiraSprint,
+  JiraSprintIssueList,
+  JiraSprintIssueListOptions,
   JiraSprintList,
   JiraSprintListOptions,
   MoveJiraSprintIssuesInput,
@@ -137,6 +143,27 @@ export class AtlassianClient {
     });
   }
 
+  async searchJiraIssues(jql: string, opts: JiraSearchOptions = {}): Promise<JiraSearchResult> {
+    const query = requireNonEmpty(jql, "jql");
+    const maxResults = opts.maxResults ?? 100;
+    const fields = opts.fields !== undefined && opts.fields.length > 0 ? [...opts.fields] : ["*navigable"];
+    const issues: JiraIssue[] = [];
+    let nextPageToken: string | undefined;
+
+    for (;;) {
+      const data = await this.request<unknown>("POST", "/rest/api/3/search/jql", {
+        body: { jql: query, maxResults, fields, nextPageToken },
+      });
+      const page = JiraSearchPageSchema.parse(data);
+      issues.push(...page.issues);
+      nextPageToken = page.nextPageToken;
+      if (nextPageToken === undefined || page.isLast === true || page.issues.length === 0) break;
+      if (opts.limit !== undefined && issues.length >= opts.limit) break;
+    }
+
+    return { issues: opts.limit !== undefined ? issues.slice(0, opts.limit) : issues };
+  }
+
   async getJiraSprint(sprintId: string | number): Promise<JiraSprint> {
     const data = await this.request<unknown>("GET", `/rest/agile/1.0/sprint/${encodeURIComponent(String(sprintId))}`);
     return JiraSprintSchema.parse(data);
@@ -147,6 +174,29 @@ export class AtlassianClient {
       query: { state: opts.state },
     });
     return JiraSprintListSchema.parse(data);
+  }
+
+  async listJiraSprintIssues(sprintId: string | number, opts: JiraSprintIssueListOptions = {}): Promise<JiraSprintIssueList> {
+    const path = `/rest/agile/1.0/sprint/${encodeURIComponent(String(sprintId))}/issue`;
+    const maxResults = opts.maxResults ?? 50;
+    const fields = opts.fields !== undefined && opts.fields.length > 0 ? opts.fields.join(",") : undefined;
+    const issues: JiraIssue[] = [];
+    let startAt = 0;
+    let total: number | undefined;
+
+    for (;;) {
+      const data = await this.request<unknown>("GET", path, {
+        query: { startAt, maxResults, fields },
+      });
+      const page = JiraSprintIssuePageSchema.parse(data);
+      issues.push(...page.issues);
+      total = page.total;
+      if (page.isLast === true || page.issues.length === 0) break;
+      if (total !== undefined && issues.length >= total) break;
+      startAt += page.issues.length;
+    }
+
+    return { total: total ?? issues.length, issues };
   }
 
   async createJiraSprint(input: CreateJiraSprintInput): Promise<JiraSprint> {

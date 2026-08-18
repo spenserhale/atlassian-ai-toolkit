@@ -30,6 +30,24 @@ export const JiraIssueSchema = z.object({
 
 export type JiraIssue = z.infer<typeof JiraIssueSchema>;
 
+export const JiraSearchPageSchema = z.object({
+  nextPageToken: z.string().optional(),
+  isLast: z.boolean().optional(),
+  issues: z.array(JiraIssueSchema),
+}).passthrough();
+
+export type JiraSearchPage = z.infer<typeof JiraSearchPageSchema>;
+
+export interface JiraSearchResult {
+  readonly issues: JiraIssue[];
+}
+
+export interface JiraSearchOptions {
+  readonly maxResults?: number;
+  readonly fields?: readonly string[];
+  readonly limit?: number;
+}
+
 export const JiraAttachmentSchema = z.object({
   id: z.string(),
   filename: z.string().optional(),
@@ -74,6 +92,26 @@ export type JiraSprintList = z.infer<typeof JiraSprintListSchema>;
 
 export interface JiraSprintListOptions {
   readonly state?: JiraSprintState;
+}
+
+export const JiraSprintIssuePageSchema = z.object({
+  startAt: z.number().optional(),
+  maxResults: z.number().optional(),
+  total: z.number().optional(),
+  isLast: z.boolean().optional(),
+  issues: z.array(JiraIssueSchema),
+}).passthrough();
+
+export type JiraSprintIssuePage = z.infer<typeof JiraSprintIssuePageSchema>;
+
+export interface JiraSprintIssueList {
+  readonly total: number;
+  readonly issues: JiraIssue[];
+}
+
+export interface JiraSprintIssueListOptions {
+  readonly maxResults?: number;
+  readonly fields?: readonly string[];
 }
 
 export interface CreateJiraSprintInput {

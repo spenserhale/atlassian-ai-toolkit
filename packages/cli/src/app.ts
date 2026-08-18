@@ -5,6 +5,7 @@ import { confluenceDeleteCommand } from "./commands/confluence-delete.js";
 import { confluenceGetCommand } from "./commands/confluence-get.js";
 import { jiraDeleteCommand } from "./commands/jira-delete.js";
 import { jiraGetCommand } from "./commands/jira-get.js";
+import { jiraSearchCommand } from "./commands/jira-search.js";
 import { jiraSprintRoutes } from "./commands/jira-sprint.js";
 
 const jiraRoutes = buildRouteMap({
@@ -12,6 +13,7 @@ const jiraRoutes = buildRouteMap({
     get: jiraGetCommand,
     attach: jiraAttachCommand,
     delete: jiraDeleteCommand,
+    search: jiraSearchCommand,
     sprint: jiraSprintRoutes,
   },
   docs: {

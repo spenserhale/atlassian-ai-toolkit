@@ -86,6 +86,24 @@ export function registerResourceTools(server: FastMCP) {
   });
 
   server.addTool({
+    name: "jira_search_issues",
+    description:
+      "Search Jira issues with JQL, auto-paginated. Returns matching issue keys and fields. Use jira_list_sprint_issues when you need every issue in one sprint.",
+    parameters: z.object({
+      jql: z.string().min(1).describe("JQL query, for example: project = PROJ AND sprint = 42 AND status != Done"),
+      limit: z.number().int().positive().optional().describe("Stop after this many issues"),
+      fields: z.array(z.string()).optional().describe("Issue fields to return; defaults to *navigable"),
+    }),
+    execute: async (args) => {
+      const result = await getClient().searchJiraIssues(args.jql, {
+        limit: args.limit,
+        fields: args.fields,
+      });
+      return JSON.stringify(result, null, 2);
+    },
+  });
+
+  server.addTool({
     name: "jira_get_sprint",
     description: "Get one Jira sprint by id. Use this before editing or closing a sprint when you need the current state.",
     parameters: z.object({
@@ -109,6 +127,19 @@ export function registerResourceTools(server: FastMCP) {
         state: args.state,
       });
       return JSON.stringify(sprints, null, 2);
+    },
+  });
+
+  server.addTool({
+    name: "jira_list_sprint_issues",
+    description:
+      "List all issues in a Jira sprint, auto-paginated. Use to collect issue keys before rollover or closing a sprint.",
+    parameters: z.object({
+      sprintId: z.number().int().positive().describe("Jira sprint id"),
+    }),
+    execute: async (args) => {
+      const result = await getClient().listJiraSprintIssues(args.sprintId);
+      return JSON.stringify(result, null, 2);
     },
   });
 

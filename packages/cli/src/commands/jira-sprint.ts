@@ -1,6 +1,6 @@
 import { buildCommand, buildRouteMap } from "@stricli/core";
 import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
-import type { JiraSprintState, MoveJiraSprintIssuesInput, UpdateJiraSprintInput } from "@atlassian-ai-toolkit/sdk";
+import type { JiraIssue, JiraSprintState, MoveJiraSprintIssuesInput, UpdateJiraSprintInput } from "@atlassian-ai-toolkit/sdk";
 
 const sprintStates = ["future", "active", "closed"] as const;
 
@@ -92,6 +92,15 @@ function formatSprint(sprint: { id: number; name: string; state: string; goal?: 
   return lines.join("\n");
 }
 
+function formatIssue(issue: JiraIssue): string {
+  const summary = typeof issue.fields?.summary === "string" ? issue.fields.summary : "";
+  const status = issue.fields?.status;
+  const statusName = typeof status === "object" && status !== null && typeof (status as { name?: unknown }).name === "string"
+    ? ` (${(status as { name: string }).name})`
+    : "";
+  return `- ${issue.key}: ${summary}${statusName}`;
+}
+
 function printResult(value: unknown, json: boolean, text: string): void {
   console.log(json ? JSON.stringify(value, null, 2) : text);
 }
@@ -137,6 +146,28 @@ const listCommand = buildCommand({
         state: parseState(flags.state),
       });
       const text = [`sprints[${result.values.length}]:`, ...result.values.map((sprint) => `- ${sprint.id}: ${sprint.name} (${sprint.state})`)].join("\n");
+      printResult(result, flags.json, text);
+    } catch (err) {
+      handleError(err);
+    }
+  },
+});
+
+const issuesCommand = buildCommand({
+  docs: { brief: "List issues in a Jira sprint" },
+  parameters: {
+    flags: {
+      json: { kind: "boolean", brief: "Output as JSON", default: false },
+    },
+    positional: {
+      kind: "tuple",
+      parameters: [{ brief: "Sprint ID", parse: String }],
+    },
+  },
+  async func(this: void, flags: JsonFlag, sprintId: string) {
+    try {
+      const result = await getClient().listJiraSprintIssues(sprintId);
+      const text = [`issues[${result.issues.length}]:`, ...result.issues.map(formatIssue)].join("\n");
       printResult(result, flags.json, text);
     } catch (err) {
       handleError(err);
@@ -318,6 +349,7 @@ export const jiraSprintRoutes = buildRouteMap({
   routes: {
     get: getCommand,
     list: listCommand,
+    issues: issuesCommand,
     create: createCommand,
     edit: editCommand,
     close: closeCommand,

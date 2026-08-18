@@ -60,6 +60,125 @@ describe("AtlassianClient", () => {
     expect(calls[0]?.init?.method).toBe("GET");
   });
 
+  it("lists issues in a sprint in a single page", async () => {
+    const calls = mockJsonFetch({
+      startAt: 0,
+      maxResults: 50,
+      total: 2,
+      isLast: true,
+      issues: [
+        { id: "10001", key: "PROJ-1", fields: { summary: "Fix login" } },
+        { id: "10002", key: "PROJ-2", fields: { summary: "Ship rollover" } },
+      ],
+    });
+
+    const result = await createClient().listJiraSprintIssues(42);
+
+    expect(result.total).toBe(2);
+    expect(result.issues.map((issue) => issue.key)).toEqual(["PROJ-1", "PROJ-2"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/sprint/42/issue?startAt=0&maxResults=50");
+    expect(calls[0]?.init?.method).toBe("GET");
+  });
+
+  it("lists every issue in a sprint across pages", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const pages = [
+      {
+        startAt: 0,
+        maxResults: 50,
+        total: 3,
+        isLast: false,
+        issues: [{ id: "1", key: "PROJ-1" }, { id: "2", key: "PROJ-2" }],
+      },
+      { startAt: 2, maxResults: 50, total: 3, isLast: true, issues: [{ id: "3", key: "PROJ-3" }] },
+    ];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const page = pages[calls.length - 1] ?? pages[pages.length - 1];
+      return new Response(JSON.stringify(page), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const result = await createClient().listJiraSprintIssues(42);
+
+    expect(result.total).toBe(3);
+    expect(result.issues.map((issue) => issue.key)).toEqual(["PROJ-1", "PROJ-2", "PROJ-3"]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/sprint/42/issue?startAt=0&maxResults=50");
+    expect(calls[1]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/sprint/42/issue?startAt=2&maxResults=50");
+  });
+
+  it("passes page size and field filters when listing sprint issues", async () => {
+    const calls = mockJsonFetch({ startAt: 0, maxResults: 100, total: 0, isLast: true, issues: [] });
+
+    const result = await createClient().listJiraSprintIssues(42, { maxResults: 100, fields: ["summary", "status"] });
+
+    expect(result.issues).toHaveLength(0);
+    expect(calls[0]?.url).toBe(
+      "https://example.atlassian.net/rest/agile/1.0/sprint/42/issue?startAt=0&maxResults=100&fields=summary%2Cstatus"
+    );
+  });
+
+  it("searches Jira issues with JQL in a single page", async () => {
+    const calls = mockJsonFetch({
+      isLast: true,
+      issues: [{ id: "10001", key: "PROJ-1", fields: { summary: "Fix login" } }],
+    });
+
+    const result = await createClient().searchJiraIssues("project = PROJ");
+
+    expect(result.issues.map((issue) => issue.key)).toEqual(["PROJ-1"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/api/3/search/jql");
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      jql: "project = PROJ",
+      maxResults: 100,
+      fields: ["*navigable"],
+    });
+  });
+
+  it("searches Jira issues across pages with next page tokens", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const pages = [
+      { issues: [{ id: "1", key: "PROJ-1" }, { id: "2", key: "PROJ-2" }], nextPageToken: "tok-1" },
+      { issues: [{ id: "3", key: "PROJ-3" }], isLast: true },
+    ];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const page = pages[calls.length - 1] ?? pages[pages.length - 1];
+      return new Response(JSON.stringify(page), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const result = await createClient().searchJiraIssues("project = PROJ");
+
+    expect(result.issues.map((issue) => issue.key)).toEqual(["PROJ-1", "PROJ-2", "PROJ-3"]);
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({ jql: "project = PROJ" });
+    expect(JSON.parse(String(calls[1]?.init?.body))).toMatchObject({ nextPageToken: "tok-1" });
+  });
+
+  it("applies limit and field filters to JQL search", async () => {
+    const calls = mockJsonFetch({
+      isLast: true,
+      issues: [{ id: "1", key: "PROJ-1" }, { id: "2", key: "PROJ-2" }, { id: "3", key: "PROJ-3" }],
+    });
+
+    const result = await createClient().searchJiraIssues("project = PROJ", { limit: 2, fields: ["summary", "status"] });
+
+    expect(result.issues.map((issue) => issue.key)).toEqual(["PROJ-1", "PROJ-2"]);
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({
+      maxResults: 100,
+      fields: ["summary", "status"],
+    });
+  });
+
   it("creates a future Jira sprint", async () => {
     const calls = mockJsonFetch({ id: 8, state: "future", name: "Next Sprint", originBoardId: 123 });
 
