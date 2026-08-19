@@ -2,7 +2,7 @@ import { basename } from "node:path";
 import { readFile } from "node:fs/promises";
 import type { FastMCP } from "fastmcp";
 import { z } from "zod";
-import { AtlassianClient, JIRA_SPRINT_ISSUE_MOVE_LIMIT, resolveConfig } from "@atlassian-ai-toolkit/sdk";
+import { AtlassianClient, AtlassianNotFoundError, JIRA_SPRINT_ISSUE_MOVE_LIMIT, resolveConfig } from "@atlassian-ai-toolkit/sdk";
 import type { JiraAttachmentUpload, JiraSprintIssueMoveResult, JiraSprintState, MoveJiraSprintIssuesInput } from "@atlassian-ai-toolkit/sdk";
 
 function getClient(): AtlassianClient {
@@ -21,6 +21,17 @@ function buildMoveInput(args: { issueKeys?: string[]; moveToBacklog?: boolean; m
   if (args.moveToBacklog) return { issueKeys: args.issueKeys, target: "backlog" };
   if (args.moveToSprintId === undefined) throw new Error("Provide one rollover target: moveToSprintId or moveToBacklog");
   return { issueKeys: args.issueKeys, targetSprintId: args.moveToSprintId };
+}
+
+/** Confirms a moveToSprintId target exists so dry-run previews don't echo back an invalid sprint id. */
+async function validateRolloverTarget(client: AtlassianClient, moveInput: MoveJiraSprintIssuesInput | undefined): Promise<void> {
+  if (!moveInput || !("targetSprintId" in moveInput)) return;
+  try {
+    await client.getJiraSprint(moveInput.targetSprintId);
+  } catch (err) {
+    if (err instanceof AtlassianNotFoundError) throw new Error(`moveToSprintId target ${moveInput.targetSprintId} does not exist`);
+    throw err;
+  }
 }
 
 function summarizeAttachments(result: { results: Array<{ id: string; title?: string; status?: string; _links?: Record<string, unknown> }> }) {
@@ -217,6 +228,7 @@ export function registerResourceTools(server: FastMCP) {
     execute: async (args) => {
       const client = getClient();
       const moveInput = buildMoveInput(args);
+      await validateRolloverTarget(client, moveInput);
       const sprint = await client.getJiraSprint(args.sprintId);
 
       if (!args.force) {
@@ -273,6 +285,7 @@ export function registerResourceTools(server: FastMCP) {
       const client = getClient();
       const moveInput = buildMoveInput(args);
       if (!moveInput) throw new Error("Provide one rollover target: moveToSprintId or moveToBacklog");
+      await validateRolloverTarget(client, moveInput);
       const sprint = await client.getJiraSprint(args.sourceSprintId);
 
       if (!args.force) {

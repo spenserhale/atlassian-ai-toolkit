@@ -100,6 +100,17 @@ function buildMoveInput(flags: Pick<CloseFlags, "issues" | "move-to-backlog" | "
   return { issueKeys, targetSprintId: parseNumber(flags["move-to-sprint"] ?? "", "--move-to-sprint") };
 }
 
+/** Confirms a --move-to-sprint target exists so dry-run previews don't echo back an invalid sprint id. */
+async function validateRolloverTarget(client: AtlassianClient, moveInput: MoveJiraSprintIssuesInput | undefined): Promise<void> {
+  if (!moveInput || !("targetSprintId" in moveInput)) return;
+  try {
+    await client.getJiraSprint(moveInput.targetSprintId);
+  } catch (err) {
+    if (err instanceof AtlassianNotFoundError) throw new Error(`--move-to-sprint target ${moveInput.targetSprintId} does not exist`);
+    throw err;
+  }
+}
+
 function formatSprint(sprint: { id: number; name: string; state: string; goal?: string }): string {
   const lines = [`id: ${sprint.id}`, `name: ${sprint.name}`, `state: ${sprint.state}`];
   if (sprint.goal) lines.push(`goal: ${sprint.goal}`);
@@ -308,6 +319,7 @@ const closeCommand = buildCommand({
     try {
       const client = getClient();
       const moveInput = buildMoveInput(flags);
+      await validateRolloverTarget(client, moveInput);
       const sprint = await client.getJiraSprint(sprintId);
       const batches = moveInput ? planBatches(moveInput.issueKeys) : 0;
       const preview = {
@@ -376,6 +388,7 @@ const rolloverCommand = buildCommand({
       const client = getClient();
       const moveInput = buildMoveInput(flags);
       if (!moveInput) throw new Error("Provide one rollover target: --move-to-sprint or --move-to-backlog");
+      await validateRolloverTarget(client, moveInput);
       const sprint = await client.getJiraSprint(sprintId);
       const batches = planBatches(moveInput.issueKeys);
 
