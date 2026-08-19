@@ -92,6 +92,7 @@ export type JiraSprintList = z.infer<typeof JiraSprintListSchema>;
 
 export interface JiraSprintListOptions {
   readonly state?: JiraSprintState;
+  readonly maxResults?: number;
 }
 
 export const JiraSprintIssuePageSchema = z.object({
@@ -133,6 +134,18 @@ export interface UpdateJiraSprintInput {
 export type MoveJiraSprintIssuesInput =
   | { readonly issueKeys: readonly string[]; readonly targetSprintId: number }
   | { readonly issueKeys: readonly string[]; readonly target: "backlog" };
+
+export interface JiraSprintIssueMoveBatchFailure {
+  readonly batchIndex: number;
+  readonly issueKeys: readonly string[];
+  readonly error: string;
+}
+
+export interface JiraSprintIssueMoveResult {
+  readonly batches: number;
+  readonly moved: number;
+  readonly failed: readonly JiraSprintIssueMoveBatchFailure[];
+}
 
 export const ConfluencePageSchema = z.object({
   id: z.string(),

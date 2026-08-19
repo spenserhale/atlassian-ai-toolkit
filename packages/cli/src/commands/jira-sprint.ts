@@ -1,6 +1,20 @@
 import { buildCommand, buildRouteMap } from "@stricli/core";
-import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
-import type { JiraIssue, JiraSprintState, MoveJiraSprintIssuesInput, UpdateJiraSprintInput } from "@atlassian-ai-toolkit/sdk";
+import {
+  AtlassianAuthError,
+  AtlassianClient,
+  AtlassianError,
+  AtlassianNotFoundError,
+  AtlassianRateLimitError,
+  JIRA_SPRINT_ISSUE_MOVE_LIMIT,
+  resolveConfig,
+} from "@atlassian-ai-toolkit/sdk";
+import type {
+  JiraIssue,
+  JiraSprintIssueMoveResult,
+  JiraSprintState,
+  MoveJiraSprintIssuesInput,
+  UpdateJiraSprintInput,
+} from "@atlassian-ai-toolkit/sdk";
 
 const sprintStates = ["future", "active", "closed"] as const;
 
@@ -105,8 +119,43 @@ function printResult(value: unknown, json: boolean, text: string): void {
   console.log(json ? JSON.stringify(value, null, 2) : text);
 }
 
-function handleError(err: unknown): never {
-  console.error(`error: ${err instanceof Error ? err.message : err}`);
+function planBatches(issueKeys: readonly string[]): number {
+  return Math.ceil(issueKeys.length / JIRA_SPRINT_ISSUE_MOVE_LIMIT);
+}
+
+function errorCode(err: unknown): string {
+  if (err instanceof AtlassianAuthError) return "auth_error";
+  if (err instanceof AtlassianNotFoundError) return "not_found";
+  if (err instanceof AtlassianRateLimitError) return "rate_limited";
+  if (err instanceof AtlassianError) return "upstream_error";
+  return "usage_error";
+}
+
+function handleError(err: unknown, json: boolean): never {
+  const message = err instanceof Error ? err.message : String(err);
+  if (json) {
+    console.log(JSON.stringify({ status: "error", code: errorCode(err), message }, null, 2));
+  } else {
+    console.error(`error: ${message}`);
+  }
+  process.exit(1);
+}
+
+/** Fails the process reporting how much of a rollover landed, without closing the sprint. */
+function reportMoveFailure(json: boolean, sprintLabel: Record<string, unknown>, moveResult: JiraSprintIssueMoveResult, totalRequested: number): never {
+  const message = `Rollover failed after moving ${moveResult.moved} of ${totalRequested} issues.`;
+  const hint = "Re-run the same command — issue moves are idempotent, so already-moved issues are unaffected.";
+  const result = {
+    status: "error",
+    code: "sprint_move_failed",
+    ...sprintLabel,
+    batches: moveResult.batches,
+    moved: moveResult.moved,
+    failed: moveResult.failed,
+    message,
+    hint,
+  };
+  printResult(result, json, `status: error\ncode: sprint_move_failed\n${message}\n${hint}`);
   process.exit(1);
 }
 
@@ -126,7 +175,7 @@ const getCommand = buildCommand({
       const sprint = await getClient().getJiraSprint(sprintId);
       printResult(sprint, flags.json, formatSprint(sprint));
     } catch (err) {
-      handleError(err);
+      handleError(err, flags.json);
     }
   },
 });
@@ -148,7 +197,7 @@ const listCommand = buildCommand({
       const text = [`sprints[${result.values.length}]:`, ...result.values.map((sprint) => `- ${sprint.id}: ${sprint.name} (${sprint.state})`)].join("\n");
       printResult(result, flags.json, text);
     } catch (err) {
-      handleError(err);
+      handleError(err, flags.json);
     }
   },
 });
@@ -170,7 +219,7 @@ const issuesCommand = buildCommand({
       const text = [`issues[${result.issues.length}]:`, ...result.issues.map(formatIssue)].join("\n");
       printResult(result, flags.json, text);
     } catch (err) {
-      handleError(err);
+      handleError(err, flags.json);
     }
   },
 });
@@ -198,7 +247,7 @@ const createCommand = buildCommand({
       });
       printResult({ status: "created", sprint }, flags.json, `status: created\n${formatSprint(sprint)}`);
     } catch (err) {
-      handleError(err);
+      handleError(err, flags.json);
     }
   },
 });
@@ -233,7 +282,7 @@ const editCommand = buildCommand({
       const sprint = await getClient().updateJiraSprint(sprintId, input);
       printResult({ status: "updated", sprint }, flags.json, `status: updated\n${formatSprint(sprint)}`);
     } catch (err) {
-      handleError(err);
+      handleError(err, flags.json);
     }
   },
 });
@@ -260,15 +309,18 @@ const closeCommand = buildCommand({
       const client = getClient();
       const moveInput = buildMoveInput(flags);
       const sprint = await client.getJiraSprint(sprintId);
+      const batches = moveInput ? planBatches(moveInput.issueKeys) : 0;
       const preview = {
         status: "dry_run",
         wouldClose: { id: sprint.id, name: sprint.name, state: sprint.state },
         rollover: moveInput,
+        batches,
+        issueCount: moveInput?.issueKeys.length ?? 0,
         hint: `Pass --force --confirm ${sprint.id} to close this Jira sprint.`,
       };
 
       if (flags["dry-run"] || !flags.force) {
-        printResult(preview, flags.json, `status: dry_run\nwould_close: ${sprint.id}\nhint: ${preview.hint}`);
+        printResult(preview, flags.json, `status: dry_run\nwould_close: ${sprint.id}\nbatches: ${batches}\nhint: ${preview.hint}`);
         return;
       }
 
@@ -282,11 +334,22 @@ const closeCommand = buildCommand({
         process.exit(2);
       }
 
-      if (moveInput) await client.moveJiraSprintIssues(moveInput);
+      let moveResult: JiraSprintIssueMoveResult | undefined;
+      if (moveInput) {
+        moveResult = await client.moveJiraSprintIssues(moveInput);
+        if (moveResult.failed.length > 0) {
+          reportMoveFailure(flags.json, { sprint: { id: sprint.id, name: sprint.name, state: sprint.state } }, moveResult, moveInput.issueKeys.length);
+        }
+      }
+
       const closed = await client.updateJiraSprint(sprint.id, { state: "closed" });
-      printResult({ status: "closed", sprint: closed, rollover: moveInput }, flags.json, `status: closed\n${formatSprint(closed)}`);
+      printResult(
+        { status: "closed", sprint: closed, rollover: moveInput, batches: moveResult?.batches ?? 0, moved: moveResult?.moved ?? 0, failed: [] },
+        flags.json,
+        `status: closed\n${formatSprint(closed)}`
+      );
     } catch (err) {
-      handleError(err);
+      handleError(err, flags.json);
     }
   },
 });
@@ -314,16 +377,19 @@ const rolloverCommand = buildCommand({
       const moveInput = buildMoveInput(flags);
       if (!moveInput) throw new Error("Provide one rollover target: --move-to-sprint or --move-to-backlog");
       const sprint = await client.getJiraSprint(sprintId);
+      const batches = planBatches(moveInput.issueKeys);
 
       const preview = {
         status: "dry_run",
         sourceSprint: { id: sprint.id, name: sprint.name, state: sprint.state },
         rollover: moveInput,
+        batches,
+        issueCount: moveInput.issueKeys.length,
         hint: `Pass --force --confirm ${sprint.id} to move these Jira issues.`,
       };
 
       if (flags["dry-run"] || !flags.force) {
-        printResult(preview, flags.json, `status: dry_run\nsource_sprint: ${sprint.id}\nhint: ${preview.hint}`);
+        printResult(preview, flags.json, `status: dry_run\nsource_sprint: ${sprint.id}\nbatches: ${batches}\nhint: ${preview.hint}`);
         return;
       }
 
@@ -337,10 +403,18 @@ const rolloverCommand = buildCommand({
         process.exit(2);
       }
 
-      await client.moveJiraSprintIssues(moveInput);
-      printResult({ status: "moved", sourceSprint: { id: sprint.id, name: sprint.name }, rollover: moveInput }, flags.json, `status: moved\nsource_sprint: ${sprint.id}`);
+      const moveResult = await client.moveJiraSprintIssues(moveInput);
+      if (moveResult.failed.length > 0) {
+        reportMoveFailure(flags.json, { sourceSprint: { id: sprint.id, name: sprint.name } }, moveResult, moveInput.issueKeys.length);
+      }
+
+      printResult(
+        { status: "moved", sourceSprint: { id: sprint.id, name: sprint.name }, rollover: moveInput, batches: moveResult.batches, moved: moveResult.moved, failed: [] },
+        flags.json,
+        `status: moved\nsource_sprint: ${sprint.id}`
+      );
     } catch (err) {
-      handleError(err);
+      handleError(err, flags.json);
     }
   },
 });

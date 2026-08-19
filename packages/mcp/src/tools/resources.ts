@@ -2,8 +2,8 @@ import { basename } from "node:path";
 import { readFile } from "node:fs/promises";
 import type { FastMCP } from "fastmcp";
 import { z } from "zod";
-import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
-import type { JiraAttachmentUpload, JiraSprintState, MoveJiraSprintIssuesInput } from "@atlassian-ai-toolkit/sdk";
+import { AtlassianClient, JIRA_SPRINT_ISSUE_MOVE_LIMIT, resolveConfig } from "@atlassian-ai-toolkit/sdk";
+import type { JiraAttachmentUpload, JiraSprintIssueMoveResult, JiraSprintState, MoveJiraSprintIssuesInput } from "@atlassian-ai-toolkit/sdk";
 
 function getClient(): AtlassianClient {
   const config = resolveConfig();
@@ -35,6 +35,24 @@ function summarizeAttachments(result: { results: Array<{ id: string; title?: str
 function requireNonEmpty(value: string, label: string): string {
   if (value.trim().length === 0) throw new Error(`${label} is required`);
   return value;
+}
+
+function planBatches(issueKeys: readonly string[]): number {
+  return Math.ceil(issueKeys.length / JIRA_SPRINT_ISSUE_MOVE_LIMIT);
+}
+
+/** Reports how much of a rollover landed, without closing the sprint. */
+function moveFailureResult(sprintLabel: Record<string, unknown>, moveResult: JiraSprintIssueMoveResult, totalRequested: number): string {
+  return JSON.stringify({
+    status: "error",
+    code: "sprint_move_failed",
+    ...sprintLabel,
+    batches: moveResult.batches,
+    moved: moveResult.moved,
+    failed: moveResult.failed,
+    message: `Rollover failed after moving ${moveResult.moved} of ${totalRequested} issues.`,
+    hint: "Call again — issue moves are idempotent, so already-moved issues are unaffected.",
+  }, null, 2);
 }
 
 export function registerResourceTools(server: FastMCP) {
@@ -206,6 +224,8 @@ export function registerResourceTools(server: FastMCP) {
           status: "dry_run",
           wouldClose: { id: sprint.id, name: sprint.name, state: sprint.state },
           rollover: moveInput,
+          batches: moveInput ? planBatches(moveInput.issueKeys) : 0,
+          issueCount: moveInput?.issueKeys.length ?? 0,
           hint: `Call again with force true and confirm "${sprint.id}" to close this Jira sprint.`,
         }, null, 2);
       }
@@ -218,9 +238,23 @@ export function registerResourceTools(server: FastMCP) {
         }, null, 2);
       }
 
-      if (moveInput) await client.moveJiraSprintIssues(moveInput);
+      let moveResult: JiraSprintIssueMoveResult | undefined;
+      if (moveInput) {
+        moveResult = await client.moveJiraSprintIssues(moveInput);
+        if (moveResult.failed.length > 0) {
+          return moveFailureResult({ sprint: { id: sprint.id, name: sprint.name, state: sprint.state } }, moveResult, moveInput.issueKeys.length);
+        }
+      }
+
       const closed = await client.updateJiraSprint(sprint.id, { state: "closed" });
-      return JSON.stringify({ status: "closed", sprint: closed, rollover: moveInput }, null, 2);
+      return JSON.stringify({
+        status: "closed",
+        sprint: closed,
+        rollover: moveInput,
+        batches: moveResult?.batches ?? 0,
+        moved: moveResult?.moved ?? 0,
+        failed: [],
+      }, null, 2);
     },
   });
 
@@ -246,6 +280,8 @@ export function registerResourceTools(server: FastMCP) {
           status: "dry_run",
           sourceSprint: { id: sprint.id, name: sprint.name, state: sprint.state },
           rollover: moveInput,
+          batches: planBatches(moveInput.issueKeys),
+          issueCount: moveInput.issueKeys.length,
           hint: `Call again with force true and confirm "${sprint.id}" to move these Jira issues.`,
         }, null, 2);
       }
@@ -258,8 +294,19 @@ export function registerResourceTools(server: FastMCP) {
         }, null, 2);
       }
 
-      await client.moveJiraSprintIssues(moveInput);
-      return JSON.stringify({ status: "moved", sourceSprint: { id: sprint.id, name: sprint.name }, rollover: moveInput }, null, 2);
+      const moveResult = await client.moveJiraSprintIssues(moveInput);
+      if (moveResult.failed.length > 0) {
+        return moveFailureResult({ sourceSprint: { id: sprint.id, name: sprint.name } }, moveResult, moveInput.issueKeys.length);
+      }
+
+      return JSON.stringify({
+        status: "moved",
+        sourceSprint: { id: sprint.id, name: sprint.name },
+        rollover: moveInput,
+        batches: moveResult.batches,
+        moved: moveResult.moved,
+        failed: [],
+      }, null, 2);
     },
   });
 

@@ -1,4 +1,4 @@
-export { AtlassianClient } from "./client.js";
+export { AtlassianClient, JIRA_SPRINT_ISSUE_MOVE_LIMIT } from "./client.js";
 export type { JiraAttachmentUpload } from "./client.js";
 export { resolveConfig } from "./config.js";
 export { guessContentType } from "./content-type.js";
@@ -24,6 +24,8 @@ export type {
   JiraSprint,
   JiraSprintIssueList,
   JiraSprintIssueListOptions,
+  JiraSprintIssueMoveBatchFailure,
+  JiraSprintIssueMoveResult,
   JiraSprintIssuePage,
   JiraSprintList,
   JiraSprintListOptions,

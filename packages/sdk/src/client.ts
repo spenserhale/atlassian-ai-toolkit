@@ -23,6 +23,7 @@ import type {
   JiraSprint,
   JiraSprintIssueList,
   JiraSprintIssueListOptions,
+  JiraSprintIssueMoveResult,
   JiraSprintList,
   JiraSprintListOptions,
   MoveJiraSprintIssuesInput,
@@ -37,6 +38,9 @@ import {
 } from "./errors.js";
 
 type QueryValue = string | number | boolean | undefined;
+
+/** Jira's agile API rejects sprint issue moves with more than this many issue keys in one request. */
+export const JIRA_SPRINT_ISSUE_MOVE_LIMIT = 50;
 
 interface RequestOptions {
   readonly body?: BodyInit | unknown;
@@ -170,10 +174,27 @@ export class AtlassianClient {
   }
 
   async listJiraSprints(boardId: string | number, opts: JiraSprintListOptions = {}): Promise<JiraSprintList> {
-    const data = await this.request<unknown>("GET", `/rest/agile/1.0/board/${encodeURIComponent(String(boardId))}/sprint`, {
-      query: { state: opts.state },
-    });
-    return JiraSprintListSchema.parse(data);
+    const path = `/rest/agile/1.0/board/${encodeURIComponent(String(boardId))}/sprint`;
+    const maxResults = opts.maxResults ?? 50;
+    const values: JiraSprint[] = [];
+    let startAt = 0;
+    let total: number | undefined;
+
+    for (;;) {
+      const data = await this.request<unknown>("GET", path, {
+        query: { state: opts.state, startAt, maxResults },
+      });
+      const page = JiraSprintListSchema.parse(data);
+      values.push(...page.values);
+      total = page.total;
+      // Jira's agile endpoints are expected to send isLast, but fall back to a short-page check
+      // in case a board's sprint list ever omits it, so this can't loop forever.
+      if (page.isLast === true || page.values.length === 0 || page.values.length < maxResults) break;
+      if (total !== undefined && values.length >= total) break;
+      startAt += page.values.length;
+    }
+
+    return { values, total: total ?? values.length, isLast: true, startAt: 0, maxResults };
   }
 
   async listJiraSprintIssues(sprintId: string | number, opts: JiraSprintIssueListOptions = {}): Promise<JiraSprintIssueList> {
@@ -209,12 +230,35 @@ export class AtlassianClient {
     return JiraSprintSchema.parse(data);
   }
 
-  async moveJiraSprintIssues(input: MoveJiraSprintIssuesInput): Promise<void> {
+  /**
+   * Moves issues into a sprint or the backlog, chunking into batches of at most
+   * JIRA_SPRINT_ISSUE_MOVE_LIMIT since Jira's agile API rejects larger requests outright.
+   * Stops at the first failing batch rather than pressing on, since the move is a set operation
+   * and re-submitting the full issueKeys list after a partial failure is safe.
+   */
+  async moveJiraSprintIssues(input: MoveJiraSprintIssuesInput): Promise<JiraSprintIssueMoveResult> {
     const path = "targetSprintId" in input
       ? `/rest/agile/1.0/sprint/${encodeURIComponent(String(input.targetSprintId))}/issue`
       : "/rest/agile/1.0/backlog/issue";
 
-    await this.request<void>("POST", path, { body: { issues: input.issueKeys } });
+    const batches: string[][] = [];
+    for (let i = 0; i < input.issueKeys.length; i += JIRA_SPRINT_ISSUE_MOVE_LIMIT) {
+      batches.push(input.issueKeys.slice(i, i + JIRA_SPRINT_ISSUE_MOVE_LIMIT));
+    }
+
+    let moved = 0;
+    const failed: JiraSprintIssueMoveResult["failed"][number][] = [];
+    for (const [batchIndex, issueKeys] of batches.entries()) {
+      try {
+        await this.request<void>("POST", path, { body: { issues: issueKeys } });
+        moved += issueKeys.length;
+      } catch (err) {
+        failed.push({ batchIndex, issueKeys, error: err instanceof Error ? err.message : String(err) });
+        break;
+      }
+    }
+
+    return { batches: batches.length, moved, failed };
   }
 
   async addJiraAttachments(

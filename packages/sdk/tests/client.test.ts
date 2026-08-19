@@ -23,6 +23,19 @@ function mockJsonFetch(body: unknown, status = 200): Array<{ url: string; init?:
   return calls;
 }
 
+function mockSequentialJsonFetch(responses: Array<{ body: unknown; status?: number }>): Array<{ url: string; init?: RequestInit }> {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const response = responses[calls.length] ?? responses[responses.length - 1];
+    calls.push({ url: String(input), init });
+    return new Response(JSON.stringify(response.body), {
+      status: response.status ?? 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+  return calls;
+}
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
 });
@@ -51,13 +64,28 @@ describe("AtlassianClient", () => {
   });
 
   it("lists Jira sprints for a board with state filtering", async () => {
-    const calls = mockJsonFetch({ values: [{ id: 7, state: "future", name: "Next Sprint" }] });
+    const calls = mockJsonFetch({ values: [{ id: 7, state: "future", name: "Next Sprint" }], isLast: true });
 
     const result = await createClient().listJiraSprints(123, { state: "future" });
 
     expect(result.values).toHaveLength(1);
-    expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/board/123/sprint?state=future");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/board/123/sprint?state=future&startAt=0&maxResults=50");
     expect(calls[0]?.init?.method).toBe("GET");
+  });
+
+  it("auto-paginates sprints across multiple pages instead of truncating at the first page", async () => {
+    const page1 = { values: Array.from({ length: 50 }, (_, i) => ({ id: i + 1, state: "closed", name: `Sprint ${i + 1}` })) };
+    const page2 = { values: Array.from({ length: 10 }, (_, i) => ({ id: i + 51, state: "closed", name: `Sprint ${i + 51}` })), isLast: true };
+    const calls = mockSequentialJsonFetch([{ body: page1 }, { body: page2 }]);
+
+    const result = await createClient().listJiraSprints(360, { state: "closed" });
+
+    expect(result.values).toHaveLength(60);
+    expect(result.values[59]?.id).toBe(60);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/board/360/sprint?state=closed&startAt=0&maxResults=50");
+    expect(calls[1]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/board/360/sprint?state=closed&startAt=50&maxResults=50");
   });
 
   it("lists issues in a sprint in a single page", async () => {
@@ -221,21 +249,53 @@ describe("AtlassianClient", () => {
   it("moves Jira sprint issues to another sprint", async () => {
     const calls = mockJsonFetch(undefined, 204);
 
-    await createClient().moveJiraSprintIssues({ issueKeys: ["PROJ-1", "PROJ-2"], targetSprintId: 99 });
+    const result = await createClient().moveJiraSprintIssues({ issueKeys: ["PROJ-1", "PROJ-2"], targetSprintId: 99 });
 
     expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/sprint/99/issue");
     expect(calls[0]?.init?.method).toBe("POST");
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ issues: ["PROJ-1", "PROJ-2"] });
+    expect(result).toEqual({ batches: 1, moved: 2, failed: [] });
   });
 
   it("moves Jira sprint issues to the backlog", async () => {
     const calls = mockJsonFetch(undefined, 204);
 
-    await createClient().moveJiraSprintIssues({ issueKeys: ["PROJ-3"], target: "backlog" });
+    const result = await createClient().moveJiraSprintIssues({ issueKeys: ["PROJ-3"], target: "backlog" });
 
     expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/backlog/issue");
     expect(calls[0]?.init?.method).toBe("POST");
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ issues: ["PROJ-3"] });
+    expect(result).toEqual({ batches: 1, moved: 1, failed: [] });
+  });
+
+  it("chunks moves over Jira's 50-issue limit into multiple batches", async () => {
+    const issueKeys = Array.from({ length: 80 }, (_, i) => `PROJ-${i + 1}`);
+    const calls = mockJsonFetch(undefined, 204);
+
+    const result = await createClient().moveJiraSprintIssues({ issueKeys, targetSprintId: 5165 });
+
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(String(calls[0]?.init?.body)).issues).toHaveLength(50);
+    expect(JSON.parse(String(calls[1]?.init?.body)).issues).toHaveLength(30);
+    expect(result).toEqual({ batches: 2, moved: 80, failed: [] });
+  });
+
+  it("stops at the first failing batch and reports how much landed", async () => {
+    const issueKeys = Array.from({ length: 60 }, (_, i) => `PROJ-${i + 1}`);
+    const calls = mockSequentialJsonFetch([
+      { body: undefined, status: 204 },
+      { body: { errorMessages: ["Internal server error"] }, status: 500 },
+    ]);
+
+    const result = await createClient().moveJiraSprintIssues({ issueKeys, targetSprintId: 5165 });
+
+    expect(calls).toHaveLength(2);
+    expect(result.batches).toBe(2);
+    expect(result.moved).toBe(50);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]?.batchIndex).toBe(1);
+    expect(result.failed[0]?.issueKeys).toHaveLength(10);
+    expect(result.failed[0]?.error).toContain("Internal server error");
   });
 
   it("uploads a Confluence attachment as multipart create-or-update by default", async () => {
