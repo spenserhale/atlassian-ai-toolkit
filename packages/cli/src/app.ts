@@ -7,6 +7,8 @@ import { jiraDeleteCommand } from "./commands/jira-delete.js";
 import { jiraGetCommand } from "./commands/jira-get.js";
 import { jiraSearchCommand } from "./commands/jira-search.js";
 import { jiraSprintRoutes } from "./commands/jira-sprint.js";
+import { upgradeCommand } from "./commands/upgrade.js";
+import { CLI_VERSION } from "./version.js";
 
 const jiraRoutes = buildRouteMap({
   routes: {
@@ -36,6 +38,7 @@ const routes = buildRouteMap({
   routes: {
     jira: jiraRoutes,
     confluence: confluenceRoutes,
+    upgrade: upgradeCommand,
   },
   docs: {
     brief: "AI-first SDK, CLI, and MCP server for Atlassian Jira and Confluence",
@@ -45,6 +48,6 @@ const routes = buildRouteMap({
 export const app = buildApplication(routes, {
   name: "atlassian",
   versionInfo: {
-    currentVersion: "0.2.0",
+    currentVersion: CLI_VERSION,
   },
 });

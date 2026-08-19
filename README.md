@@ -32,6 +32,17 @@ Pin a version with `ATLASSIAN_AI_TOOLKIT_VERSION=v0.1.0` or change the install d
 
 Available binaries: `atlassian-linux-{x64,arm64}`, `atlassian-darwin-{x64,arm64}`, and `atlassian-windows-x64.exe`.
 
+### Upgrade
+
+Upgrade an installed binary in place from the latest GitHub release (verifies the SHA256 first):
+
+```sh
+atlassian upgrade            # apply the latest release
+atlassian upgrade --dry-run  # only show current vs latest
+```
+
+On Windows, close running instances before upgrading, or re-download the exe from the [latest release](https://github.com/spenserhale/atlassian-ai-toolkit/releases/latest).
+
 ### Shell Aliases
 
 For shorter commands, add these aliases to your shell profile (`~/.zshrc` or `~/.bashrc`):
