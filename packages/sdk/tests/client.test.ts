@@ -11,6 +11,19 @@ function createClient(): AtlassianClient {
   });
 }
 
+/** A trimmed `/editmeta` response: one select, one number, and one label array. */
+const editMetaFixture = {
+  fields: {
+    customfield_13841: {
+      name: "Task Category",
+      schema: { type: "option", custom: "com.atlassian.jira.plugin.system.customfieldtypes:select" },
+      allowedValues: [{ value: "Support" }, { value: "Feature" }],
+    },
+    customfield_10105: { name: "Story Points", schema: { type: "number", custom: "com.atlassian.jira.plugin.system.customfieldtypes:float" } },
+    labels: { name: "Labels", schema: { type: "array", items: "string", system: "labels" } },
+  },
+};
+
 function mockJsonFetch(body: unknown, status = 200): Array<{ url: string; init?: RequestInit }> {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -159,6 +172,8 @@ describe("AtlassianClient", () => {
     const result = await createClient().searchJiraIssues("project = PROJ");
 
     expect(result.issues.map((issue) => issue.key)).toEqual(["PROJ-1"]);
+    expect(result).toMatchObject({ total: 1, isLast: true, startAt: 0, maxResults: 100 });
+    // An exhausted walk already knows the total, so it must not spend a count request on one.
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/api/3/search/jql");
     expect(calls[0]?.init?.method).toBe("POST");
@@ -193,10 +208,10 @@ describe("AtlassianClient", () => {
   });
 
   it("applies limit and field filters to JQL search", async () => {
-    const calls = mockJsonFetch({
-      isLast: true,
-      issues: [{ id: "1", key: "PROJ-1" }, { id: "2", key: "PROJ-2" }, { id: "3", key: "PROJ-3" }],
-    });
+    const calls = mockSequentialJsonFetch([
+      { body: { isLast: true, issues: [{ id: "1", key: "PROJ-1" }, { id: "2", key: "PROJ-2" }, { id: "3", key: "PROJ-3" }] } },
+      { body: { count: 3 } },
+    ]);
 
     const result = await createClient().searchJiraIssues("project = PROJ", { limit: 2, fields: ["summary", "status"] });
 
@@ -205,6 +220,119 @@ describe("AtlassianClient", () => {
       maxResults: 100,
       fields: ["summary", "status"],
     });
+  });
+
+  it("reports truncation and an approximate total when a JQL search stops at its limit", async () => {
+    const calls = mockSequentialJsonFetch([
+      { body: { issues: [{ id: "1", key: "PROJ-1" }, { id: "2", key: "PROJ-2" }], nextPageToken: "tok-1" } },
+      { body: { count: 231 } },
+    ]);
+
+    const result = await createClient().searchJiraIssues("project = PROJ", { limit: 2 });
+
+    expect(result).toMatchObject({ total: 231, isLast: false, startAt: 0 });
+    expect(result.issues).toHaveLength(2);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.url).toBe("https://example.atlassian.net/rest/api/3/search/approximate-count");
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ jql: "project = PROJ" });
+  });
+
+  it("rolls up committed and completed story points for a sprint", async () => {
+    const done = { status: { statusCategory: { key: "done" } } };
+    const inProgress = { status: { statusCategory: { key: "indeterminate" } } };
+    const calls = mockJsonFetch({
+      isLast: true,
+      total: 4,
+      issues: [
+        { id: "1", key: "PROJ-1", fields: { ...done, customfield_10105: 5 } },
+        { id: "2", key: "PROJ-2", fields: { ...done, customfield_10105: 2.5 } },
+        { id: "3", key: "PROJ-3", fields: { ...inProgress, customfield_10105: 3 } },
+        { id: "4", key: "PROJ-4", fields: { ...inProgress, customfield_10105: null } },
+      ],
+    });
+
+    const points = await createClient().getJiraSprintPoints(42);
+
+    expect(points).toEqual({
+      field: "customfield_10105",
+      committed: 10.5,
+      completed: 7.5,
+      issueCount: 4,
+      unestimated: 1,
+    });
+    expect(calls[0]?.url).toBe(
+      "https://example.atlassian.net/rest/agile/1.0/sprint/42/issue?startAt=0&maxResults=50&fields=customfield_10105%2Cstatus"
+    );
+  });
+
+  it("uses the configured story point field for a sprint rollup", async () => {
+    const calls = mockJsonFetch({
+      isLast: true,
+      issues: [{ id: "1", key: "PROJ-1", fields: { customfield_99: 8, status: { statusCategory: { key: "done" } } } }],
+    });
+
+    const client = new AtlassianClient({
+      siteUrl: "https://example.atlassian.net",
+      email: "user@example.com",
+      apiToken: "test-token",
+      storyPointsField: "customfield_99",
+    });
+    const points = await client.getJiraSprintPoints(42);
+
+    expect(points).toMatchObject({ field: "customfield_99", committed: 8, completed: 8 });
+    expect(calls[0]?.url).toContain("fields=customfield_99%2Cstatus");
+  });
+
+  it("edits Jira issue fields using shapes taken from the issue edit metadata", async () => {
+    const calls = mockSequentialJsonFetch([
+      { body: editMetaFixture },
+      { body: null, status: 204 },
+    ]);
+
+    const result = await createClient().editJiraIssue("PROJ-1", {
+      customfield_13841: "support",
+      "Story Points": "2",
+      labels: "audit,sprint-close",
+    });
+
+    expect(result.status).toBe("updated");
+    expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/api/3/issue/PROJ-1/editmeta");
+    expect(calls[1]?.url).toBe("https://example.atlassian.net/rest/api/3/issue/PROJ-1");
+    expect(calls[1]?.init?.method).toBe("PUT");
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
+      fields: {
+        customfield_13841: { value: "Support" },
+        customfield_10105: 2,
+        labels: ["audit", "sprint-close"],
+      },
+    });
+  });
+
+  it("resolves an edit without sending it when dry run is set", async () => {
+    const calls = mockJsonFetch(editMetaFixture);
+
+    const result = await createClient().editJiraIssue("PROJ-1", { customfield_10105: "3" }, { dryRun: true });
+
+    expect(result).toMatchObject({ key: "PROJ-1", status: "dry_run", fields: { customfield_10105: 3 } });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps editing the rest of a batch after one issue rejects a field", async () => {
+    const calls = mockSequentialJsonFetch([
+      { body: { fields: { summary: { name: "Summary", schema: { type: "string" } } } } },
+      { body: editMetaFixture },
+      { body: null, status: 204 },
+    ]);
+
+    const result = await createClient().editJiraIssues([
+      { key: "PROJ-1", fields: { customfield_10105: "3" } },
+      { key: "PROJ-2", fields: { customfield_10105: "5" } },
+    ]);
+
+    expect(result).toMatchObject({ updated: 1, failed: 1 });
+    expect(result.results[0]).toMatchObject({ key: "PROJ-1", status: "error", code: "field_not_settable" });
+    expect(result.results[1]).toMatchObject({ key: "PROJ-2", status: "updated" });
+    expect(calls).toHaveLength(3);
   });
 
   it("creates a future Jira sprint", async () => {

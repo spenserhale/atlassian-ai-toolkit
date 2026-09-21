@@ -1,6 +1,9 @@
 import {
   AtlassianConfigSchema,
   AtlassianErrorResponseSchema,
+  DEFAULT_JIRA_STORY_POINTS_FIELD,
+  JiraApproximateCountSchema,
+  JiraIssueEditMetaSchema,
   ConfluenceAttachmentUploadResultSchema,
   ConfluencePageSchema,
   JiraAttachmentListSchema,
@@ -17,7 +20,14 @@ import type {
   ConfluencePage,
   CreateJiraSprintInput,
   JiraAttachment,
+  JiraFieldEdits,
   JiraIssue,
+  JiraIssueEditBatchResult,
+  JiraIssueEditEntry,
+  JiraIssueEditMeta,
+  JiraIssueEditOptions,
+  JiraIssueEditResult,
+  JiraIssueFieldEdits,
   JiraSearchOptions,
   JiraSearchResult,
   JiraSprint,
@@ -26,13 +36,17 @@ import type {
   JiraSprintIssueMoveResult,
   JiraSprintList,
   JiraSprintListOptions,
+  JiraSprintPoints,
+  JiraSprintPointsOptions,
   MoveJiraSprintIssuesInput,
   UpdateJiraSprintInput,
 } from "./types.js";
 import { guessContentType } from "./content-type.js";
+import { planJiraIssueFieldEdits } from "./jira-fields.js";
 import {
   AtlassianAuthError,
   AtlassianError,
+  AtlassianFieldError,
   AtlassianNotFoundError,
   AtlassianRateLimitError,
 } from "./errors.js";
@@ -72,6 +86,29 @@ function toBlobPart(data: ArrayBuffer | Uint8Array | string): BlobPart {
 function toBlob(file: JiraAttachmentUpload): Blob {
   if (file.data instanceof Blob) return file.data;
   return new Blob([toBlobPart(file.data)], { type: file.contentType ?? guessContentType(file.filename) });
+}
+
+/** Per-key batch codes, in the snake_case shape the CLI and MCP report errors in. */
+function editFailureCode(err: unknown): string {
+  if (err instanceof AtlassianFieldError) return err.code;
+  if (err instanceof AtlassianAuthError) return "auth_error";
+  if (err instanceof AtlassianNotFoundError) return "not_found";
+  if (err instanceof AtlassianRateLimitError) return "rate_limited";
+  if (err instanceof AtlassianError) return "upstream_error";
+  return "unknown_error";
+}
+
+/** Jira allows fractional points, and repeated float addition drifts. */
+function roundPoints(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function isDoneIssue(issue: JiraIssue): boolean {
+  const status = issue.fields?.status;
+  if (typeof status !== "object" || status === null) return false;
+  const category = (status as { statusCategory?: unknown }).statusCategory;
+  if (typeof category !== "object" || category === null) return false;
+  return (category as { key?: unknown }).key === "done";
 }
 
 export class AtlassianClient {
@@ -147,12 +184,28 @@ export class AtlassianClient {
     });
   }
 
+  /**
+   * Jira's enhanced search pages by token and reports no total of its own. This is the only source
+   * for one, and the count is approximate by name.
+   */
+  async countJiraIssues(jql: string): Promise<number> {
+    const query = requireNonEmpty(jql, "jql");
+    const data = await this.request<unknown>("POST", "/rest/api/3/search/approximate-count", { body: { jql: query } });
+    return JiraApproximateCountSchema.parse(data).count;
+  }
+
+  /**
+   * Runs a JQL search, walking every page unless `limit` stops it early. `isLast` reports whether
+   * the walk saw the whole result set, so a truncated answer is detectable rather than inferred;
+   * `total` is exact when it did and Jira's approximate count when it did not.
+   */
   async searchJiraIssues(jql: string, opts: JiraSearchOptions = {}): Promise<JiraSearchResult> {
     const query = requireNonEmpty(jql, "jql");
     const maxResults = opts.maxResults ?? 100;
     const fields = opts.fields !== undefined && opts.fields.length > 0 ? [...opts.fields] : ["*navigable"];
     const issues: JiraIssue[] = [];
     let nextPageToken: string | undefined;
+    let exhausted = false;
 
     for (;;) {
       const data = await this.request<unknown>("POST", "/rest/api/3/search/jql", {
@@ -161,11 +214,75 @@ export class AtlassianClient {
       const page = JiraSearchPageSchema.parse(data);
       issues.push(...page.issues);
       nextPageToken = page.nextPageToken;
-      if (nextPageToken === undefined || page.isLast === true || page.issues.length === 0) break;
+      if (nextPageToken === undefined || page.isLast === true || page.issues.length === 0) {
+        exhausted = true;
+        break;
+      }
       if (opts.limit !== undefined && issues.length >= opts.limit) break;
     }
 
-    return { issues: opts.limit !== undefined ? issues.slice(0, opts.limit) : issues };
+    const limited = opts.limit !== undefined ? issues.slice(0, opts.limit) : issues;
+    const isLast = exhausted && limited.length === issues.length;
+    return {
+      issues: limited,
+      total: isLast ? limited.length : await this.countJiraIssues(query),
+      isLast,
+      startAt: 0,
+      maxResults,
+    };
+  }
+
+  async getJiraIssueEditMeta(issueIdOrKey: string): Promise<JiraIssueEditMeta> {
+    const data = await this.request<unknown>("GET", `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/editmeta`);
+    return JiraIssueEditMetaSchema.parse(data);
+  }
+
+  /**
+   * Sets fields on one issue. Field ids or display names are resolved against the issue's edit
+   * screen and values are coerced to the shape each field's schema requires, so callers do not have
+   * to know that a single-select wants `{value}` while a number wants a bare number.
+   * `dryRun` returns the resolved body without sending it.
+   */
+  async editJiraIssue(issueIdOrKey: string, edits: JiraFieldEdits, opts: JiraIssueEditOptions = {}): Promise<JiraIssueEditResult> {
+    const meta = await this.getJiraIssueEditMeta(issueIdOrKey);
+    const plan = planJiraIssueFieldEdits(meta, edits);
+
+    if (opts.dryRun === true) return { key: issueIdOrKey, status: "dry_run", ...plan };
+
+    await this.request<void>("PUT", `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}`, {
+      body: { fields: plan.fields },
+      query: { notifyUsers: opts.notifyUsers },
+    });
+    return { key: issueIdOrKey, status: "updated", ...plan };
+  }
+
+  /**
+   * Applies field edits across several issues, reporting per key and continuing past failures so one
+   * issue type that cannot take a field does not strand the rest of a batch of audit corrections.
+   */
+  async editJiraIssues(edits: readonly JiraIssueFieldEdits[], opts: JiraIssueEditOptions = {}): Promise<JiraIssueEditBatchResult> {
+    if (edits.length === 0) throw new AtlassianFieldError("Provide at least one issue to edit", "field_required");
+
+    const results: JiraIssueEditEntry[] = [];
+    for (const edit of edits) {
+      try {
+        results.push(await this.editJiraIssue(edit.key, edit.fields, opts));
+      } catch (err) {
+        results.push({
+          key: edit.key,
+          status: "error",
+          code: editFailureCode(err),
+          message: err instanceof Error ? err.message : String(err),
+          details: err instanceof AtlassianError ? err.details : undefined,
+        });
+      }
+    }
+
+    return {
+      updated: results.filter((result) => result.status !== "error").length,
+      failed: results.filter((result) => result.status === "error").length,
+      results,
+    };
   }
 
   async getJiraSprint(sprintId: string | number): Promise<JiraSprint> {
@@ -218,6 +335,37 @@ export class AtlassianClient {
     }
 
     return { total: total ?? issues.length, issues };
+  }
+
+  /**
+   * Sums story points across a sprint, splitting completed from committed by status category so
+   * site-specific workflow status names do not have to be configured. Costs one paginated pass over
+   * the sprint, requesting only the points field and status.
+   */
+  async getJiraSprintPoints(sprintId: string | number, opts: JiraSprintPointsOptions = {}): Promise<JiraSprintPoints> {
+    const field = opts.pointsField ?? this.config.storyPointsField ?? DEFAULT_JIRA_STORY_POINTS_FIELD;
+    const list = await this.listJiraSprintIssues(sprintId, { fields: [field, "status"] });
+
+    let committed = 0;
+    let completed = 0;
+    let unestimated = 0;
+    for (const issue of list.issues) {
+      const points = issue.fields?.[field];
+      if (typeof points !== "number" || !Number.isFinite(points)) {
+        unestimated += 1;
+        continue;
+      }
+      committed += points;
+      if (isDoneIssue(issue)) completed += points;
+    }
+
+    return {
+      field,
+      committed: roundPoints(committed),
+      completed: roundPoints(completed),
+      issueCount: list.issues.length,
+      unestimated,
+    };
   }
 
   async createJiraSprint(input: CreateJiraSprintInput): Promise<JiraSprint> {

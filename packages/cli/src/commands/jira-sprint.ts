@@ -11,6 +11,7 @@ import {
 import type {
   JiraIssue,
   JiraSprintIssueMoveResult,
+  JiraSprintPoints,
   JiraSprintState,
   MoveJiraSprintIssuesInput,
   UpdateJiraSprintInput,
@@ -20,6 +21,15 @@ const sprintStates = ["future", "active", "closed"] as const;
 
 interface JsonFlag {
   readonly json: boolean;
+}
+
+interface PointsFlags extends JsonFlag {
+  readonly points: boolean;
+  readonly "points-field"?: string;
+}
+
+interface IssuesFlags extends JsonFlag {
+  readonly fields?: string;
 }
 
 interface ListFlags extends JsonFlag {
@@ -43,7 +53,7 @@ interface EditFlags extends JsonFlag {
   readonly state?: string;
 }
 
-interface CloseFlags extends JsonFlag {
+interface CloseFlags extends PointsFlags {
   readonly confirm?: string;
   readonly "dry-run": boolean;
   readonly force: boolean;
@@ -81,6 +91,29 @@ function parseEditableState(value: string | undefined): JiraSprintState | undefi
   const state = parseState(value);
   if (state === "closed") throw new Error('Use "jira sprint close" to close a sprint so confirmation safeguards are applied');
   return state;
+}
+
+function parseFields(value: string | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  const fields = value.split(",").map((field) => field.trim()).filter(Boolean);
+  if (fields.length === 0) throw new Error("--fields must list at least one field, for example: --fields key,summary,status");
+  return fields;
+}
+
+/** The rollup costs a full pass over the sprint, so it only runs when --points asks for it. */
+async function rollupPoints(client: AtlassianClient, sprintId: string | number, flags: PointsFlags): Promise<JiraSprintPoints | undefined> {
+  if (!flags.points) return undefined;
+  return client.getJiraSprintPoints(sprintId, { pointsField: flags["points-field"] });
+}
+
+function formatPoints(points: JiraSprintPoints | undefined): string[] {
+  if (points === undefined) return [];
+  return [
+    `points_committed: ${points.committed}`,
+    `points_completed: ${points.completed}`,
+    `points_field: ${points.field}`,
+    `unestimated_issues: ${points.unestimated}`,
+  ];
 }
 
 function parseIssues(value: string | undefined): string[] {
@@ -174,6 +207,8 @@ const getCommand = buildCommand({
   docs: { brief: "Get a Jira sprint by ID" },
   parameters: {
     flags: {
+      points: { kind: "boolean", brief: "Include a committed/completed story point rollup", default: false },
+      "points-field": { kind: "parsed", parse: String, brief: "Story point field id; defaults to ATLASSIAN_STORY_POINTS_FIELD or customfield_10105", optional: true },
       json: { kind: "boolean", brief: "Output as JSON", default: false },
     },
     positional: {
@@ -181,10 +216,16 @@ const getCommand = buildCommand({
       parameters: [{ brief: "Sprint ID", parse: String }],
     },
   },
-  async func(this: void, flags: JsonFlag, sprintId: string) {
+  async func(this: void, flags: PointsFlags, sprintId: string) {
     try {
-      const sprint = await getClient().getJiraSprint(sprintId);
-      printResult(sprint, flags.json, formatSprint(sprint));
+      const client = getClient();
+      const sprint = await client.getJiraSprint(sprintId);
+      const points = await rollupPoints(client, sprint.id, flags);
+      printResult(
+        points === undefined ? sprint : { ...sprint, points },
+        flags.json,
+        [formatSprint(sprint), ...formatPoints(points)].join("\n")
+      );
     } catch (err) {
       handleError(err, flags.json);
     }
@@ -217,6 +258,7 @@ const issuesCommand = buildCommand({
   docs: { brief: "List issues in a Jira sprint" },
   parameters: {
     flags: {
+      fields: { kind: "parsed", parse: String, brief: "Comma-separated fields to return, for example: key,summary,status,customfield_10105", optional: true },
       json: { kind: "boolean", brief: "Output as JSON", default: false },
     },
     positional: {
@@ -224,9 +266,9 @@ const issuesCommand = buildCommand({
       parameters: [{ brief: "Sprint ID", parse: String }],
     },
   },
-  async func(this: void, flags: JsonFlag, sprintId: string) {
+  async func(this: void, flags: IssuesFlags, sprintId: string) {
     try {
-      const result = await getClient().listJiraSprintIssues(sprintId);
+      const result = await getClient().listJiraSprintIssues(sprintId, { fields: parseFields(flags.fields) });
       const text = [`issues[${result.issues.length}]:`, ...result.issues.map(formatIssue)].join("\n");
       printResult(result, flags.json, text);
     } catch (err) {
@@ -308,6 +350,8 @@ const closeCommand = buildCommand({
       issues: { kind: "parsed", parse: String, brief: "Comma-separated issue keys to roll over before closing", optional: true },
       "move-to-backlog": { kind: "boolean", brief: "Move listed issues to the backlog before closing", default: false },
       "move-to-sprint": { kind: "parsed", parse: String, brief: "Move listed issues to another sprint before closing", optional: true },
+      points: { kind: "boolean", brief: "Include a committed/completed story point rollup", default: false },
+      "points-field": { kind: "parsed", parse: String, brief: "Story point field id; defaults to ATLASSIAN_STORY_POINTS_FIELD or customfield_10105", optional: true },
       json: { kind: "boolean", brief: "Output as JSON", default: false },
     },
     positional: {
@@ -321,6 +365,9 @@ const closeCommand = buildCommand({
       const moveInput = buildMoveInput(flags);
       await validateRolloverTarget(client, moveInput);
       const sprint = await client.getJiraSprint(sprintId);
+      // Rolled up before any rollover move, so committed describes the sprint as committed rather
+      // than the remainder left after unfinished work moves out.
+      const points = await rollupPoints(client, sprint.id, flags);
       const batches = moveInput ? planBatches(moveInput.issueKeys) : 0;
       const preview = {
         status: "dry_run",
@@ -328,11 +375,16 @@ const closeCommand = buildCommand({
         rollover: moveInput,
         batches,
         issueCount: moveInput?.issueKeys.length ?? 0,
+        points,
         hint: `Pass --force --confirm ${sprint.id} to close this Jira sprint.`,
       };
 
       if (flags["dry-run"] || !flags.force) {
-        printResult(preview, flags.json, `status: dry_run\nwould_close: ${sprint.id}\nbatches: ${batches}\nhint: ${preview.hint}`);
+        printResult(
+          preview,
+          flags.json,
+          [`status: dry_run`, `would_close: ${sprint.id}`, `batches: ${batches}`, ...formatPoints(points), `hint: ${preview.hint}`].join("\n")
+        );
         return;
       }
 
@@ -356,9 +408,9 @@ const closeCommand = buildCommand({
 
       const closed = await client.updateJiraSprint(sprint.id, { state: "closed" });
       printResult(
-        { status: "closed", sprint: closed, rollover: moveInput, batches: moveResult?.batches ?? 0, moved: moveResult?.moved ?? 0, failed: [] },
+        { status: "closed", sprint: closed, rollover: moveInput, batches: moveResult?.batches ?? 0, moved: moveResult?.moved ?? 0, failed: [], points },
         flags.json,
-        `status: closed\n${formatSprint(closed)}`
+        [`status: closed`, formatSprint(closed), ...formatPoints(points)].join("\n")
       );
     } catch (err) {
       handleError(err, flags.json);

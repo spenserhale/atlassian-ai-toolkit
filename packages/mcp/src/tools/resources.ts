@@ -3,7 +3,14 @@ import { readFile } from "node:fs/promises";
 import type { FastMCP } from "fastmcp";
 import { z } from "zod";
 import { AtlassianClient, AtlassianNotFoundError, JIRA_SPRINT_ISSUE_MOVE_LIMIT, resolveConfig } from "@atlassian-ai-toolkit/sdk";
-import type { JiraAttachmentUpload, JiraSprintIssueMoveResult, JiraSprintState, MoveJiraSprintIssuesInput } from "@atlassian-ai-toolkit/sdk";
+import type {
+  JiraAttachmentUpload,
+  JiraIssueFieldEdits,
+  JiraSprintIssueMoveResult,
+  JiraSprintPoints,
+  JiraSprintState,
+  MoveJiraSprintIssuesInput,
+} from "@atlassian-ai-toolkit/sdk";
 
 function getClient(): AtlassianClient {
   const config = resolveConfig();
@@ -46,6 +53,12 @@ function summarizeAttachments(result: { results: Array<{ id: string; title?: str
 function requireNonEmpty(value: string, label: string): string {
   if (value.trim().length === 0) throw new Error(`${label} is required`);
   return value;
+}
+
+/** The rollup costs a full pass over the sprint, so it only runs when the caller asks for it. */
+async function rollupPoints(client: AtlassianClient, sprintId: number, args: { includePoints?: boolean; pointsField?: string }): Promise<JiraSprintPoints | undefined> {
+  if (args.includePoints !== true) return undefined;
+  return client.getJiraSprintPoints(sprintId, { pointsField: args.pointsField });
 }
 
 function planBatches(issueKeys: readonly string[]): number {
@@ -117,7 +130,7 @@ export function registerResourceTools(server: FastMCP) {
   server.addTool({
     name: "jira_search_issues",
     description:
-      "Search Jira issues with JQL, auto-paginated. Returns matching issue keys and fields. Use jira_list_sprint_issues when you need every issue in one sprint.",
+      "Search Jira issues with JQL, auto-paginated. Returns matching issues plus total/isLast/startAt, where isLast is false when the walk stopped at limit. Use jira_list_sprint_issues when you need every issue in one sprint.",
     parameters: z.object({
       jql: z.string().min(1).describe("JQL query, for example: project = PROJ AND sprint = 42 AND status != Done"),
       limit: z.number().int().positive().optional().describe("Stop after this many issues"),
@@ -133,14 +146,58 @@ export function registerResourceTools(server: FastMCP) {
   });
 
   server.addTool({
-    name: "jira_get_sprint",
-    description: "Get one Jira sprint by id. Use this before editing or closing a sprint when you need the current state.",
+    name: "jira_edit_issue",
+    description:
+      "Set fields on one Jira issue, or on a batch of issues. Field ids or display names are resolved against the issue's edit screen and values are coerced to the shape each field's schema requires, so pass plain values (\"Support\", 2, \"a,b\") rather than Jira payload objects. Set dryRun to validate and see the resolved payload without writing. A rejected field reports the issue's settable fields so the unsettable one can be dropped.",
     parameters: z.object({
-      sprintId: z.number().int().positive().describe("Jira sprint id"),
+      issueIdOrKey: z.string().optional().describe("Jira issue key or id; omit when using edits"),
+      fields: z.record(z.unknown()).optional().describe("Field values keyed by field id or display name, for example { \"Task Category\": \"Support\", \"customfield_10105\": 2 }"),
+      edits: z
+        .array(
+          z.object({
+            key: z.string().min(1).describe("Jira issue key or id"),
+            fields: z.record(z.unknown()).describe("Field values keyed by field id or display name"),
+          })
+        )
+        .optional()
+        .describe("Batch of per-issue edits; failures are reported per key and do not abort the batch"),
+      dryRun: z.boolean().default(false).describe("Resolve and validate the payload without sending it"),
+      notifyUsers: z.boolean().default(false).describe("Notify watchers of the edit"),
     }),
     execute: async (args) => {
-      const sprint = await getClient().getJiraSprint(args.sprintId);
-      return JSON.stringify(sprint, null, 2);
+      const client = getClient();
+      const opts = { dryRun: args.dryRun, notifyUsers: args.notifyUsers };
+
+      if (args.edits !== undefined && args.edits.length > 0) {
+        if (args.issueIdOrKey !== undefined || args.fields !== undefined) throw new Error("Pass either issueIdOrKey with fields, or edits, not both");
+        const batch = await client.editJiraIssues(args.edits as JiraIssueFieldEdits[], opts);
+        return JSON.stringify({
+          status: batch.failed > 0 ? "partial" : args.dryRun ? "dry_run" : "updated",
+          ...batch,
+        }, null, 2);
+      }
+
+      if (args.issueIdOrKey === undefined) throw new Error("Provide issueIdOrKey with fields, or edits for a batch");
+      if (args.fields === undefined) throw new Error("Provide at least one field to edit");
+      const result = await client.editJiraIssue(args.issueIdOrKey, args.fields, opts);
+      return JSON.stringify(result, null, 2);
+    },
+  });
+
+  server.addTool({
+    name: "jira_get_sprint",
+    description:
+      "Get one Jira sprint by id. Use this before editing or closing a sprint when you need the current state. Set includePoints for a committed/completed story point rollup.",
+    parameters: z.object({
+      sprintId: z.number().int().positive().describe("Jira sprint id"),
+      includePoints: z.boolean().default(false).describe("Include a committed/completed story point rollup; costs one pass over the sprint"),
+      pointsField: z.string().optional().describe("Story point field id; defaults to ATLASSIAN_STORY_POINTS_FIELD or customfield_10105"),
+    }),
+    execute: async (args) => {
+      const client = getClient();
+      const sprint = await client.getJiraSprint(args.sprintId);
+      const points = await rollupPoints(client, sprint.id, args);
+      return JSON.stringify(points === undefined ? sprint : { ...sprint, points }, null, 2);
     },
   });
 
@@ -165,9 +222,10 @@ export function registerResourceTools(server: FastMCP) {
       "List all issues in a Jira sprint, auto-paginated. Use to collect issue keys before rollover or closing a sprint.",
     parameters: z.object({
       sprintId: z.number().int().positive().describe("Jira sprint id"),
+      fields: z.array(z.string()).optional().describe("Issue fields to return; defaults to every navigable field, which is large for a full sprint"),
     }),
     execute: async (args) => {
-      const result = await getClient().listJiraSprintIssues(args.sprintId);
+      const result = await getClient().listJiraSprintIssues(args.sprintId, { fields: args.fields });
       return JSON.stringify(result, null, 2);
     },
   });
@@ -222,6 +280,8 @@ export function registerResourceTools(server: FastMCP) {
       issueKeys: z.array(z.string()).optional().describe("Issue keys to roll over before closing"),
       moveToSprintId: z.number().int().positive().optional().describe("Move issueKeys to this sprint before closing"),
       moveToBacklog: z.boolean().default(false).describe("Move issueKeys to the backlog before closing"),
+      includePoints: z.boolean().default(false).describe("Include a committed/completed story point rollup, measured before any rollover move"),
+      pointsField: z.string().optional().describe("Story point field id; defaults to ATLASSIAN_STORY_POINTS_FIELD or customfield_10105"),
       force: z.boolean().default(false).describe("Must be true to close"),
       confirm: z.string().optional().describe("Must match fetched sprint id when force is true"),
     }),
@@ -230,6 +290,9 @@ export function registerResourceTools(server: FastMCP) {
       const moveInput = buildMoveInput(args);
       await validateRolloverTarget(client, moveInput);
       const sprint = await client.getJiraSprint(args.sprintId);
+      // Rolled up before any rollover move, so committed describes the sprint as committed rather
+      // than the remainder left after unfinished work moves out.
+      const points = await rollupPoints(client, sprint.id, args);
 
       if (!args.force) {
         return JSON.stringify({
@@ -238,6 +301,7 @@ export function registerResourceTools(server: FastMCP) {
           rollover: moveInput,
           batches: moveInput ? planBatches(moveInput.issueKeys) : 0,
           issueCount: moveInput?.issueKeys.length ?? 0,
+          points,
           hint: `Call again with force true and confirm "${sprint.id}" to close this Jira sprint.`,
         }, null, 2);
       }
@@ -266,6 +330,7 @@ export function registerResourceTools(server: FastMCP) {
         batches: moveResult?.batches ?? 0,
         moved: moveResult?.moved ?? 0,
         failed: [],
+        points,
       }, null, 2);
     },
   });

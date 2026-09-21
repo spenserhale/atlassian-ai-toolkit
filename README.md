@@ -66,6 +66,70 @@ export ATLASSIAN_API_TOKEN="your-api-token"
 
 Create a scoped API token at <https://id.atlassian.com/manage-profile/security/api-tokens>.
 
+## Editing Issue Fields
+
+Set fields by id or display name. Values are coerced to the shape each field's schema requires, read
+from the issue's own edit screen, so a single-select takes `Support` rather than `{"value":"Support"}`
+and a number takes `2` rather than `"2"`.
+
+```sh
+# Preview the resolved payload without writing
+atlassian jira edit PROJ-123 --field "Task Category=Support" --field customfield_10105=2 --dry-run --json
+
+# Apply the edit
+atlassian jira edit PROJ-123 --field customfield_10105=2
+
+# Apply a reviewed batch of corrections in one command
+atlassian jira edit --from-file edits.json --json
+```
+
+`edits.json` is `[{"key": "PROJ-123", "fields": {"Task Category": "Support", "customfield_10105": 2}}]`.
+Each key is attempted, per-key results are reported, and the command exits non-zero if any key
+failed. Lists are comma-separated (`--field labels=audit,sprint-close`), `json:` passes a raw value
+through (`--field customfield_13841=json:{"id":"14501"}`), and an empty value clears a field.
+
+Jira rejects the whole call when one field is unsettable on that issue type, so a rejected field
+comes back with the issue's settable fields in the error details:
+
+```json
+{
+  "status": "error",
+  "code": "field_not_settable",
+  "message": "\"Story Points\" is not a field that can be set on this issue",
+  "details": { "field": "Story Points", "settableFields": [{ "id": "customfield_13841", "name": "Task Category", "type": "option" }] }
+}
+```
+
+Editing is reversible from the issue history, so no `--force --confirm` gate applies; `--dry-run`
+validates the payload against the edit screen without sending it.
+
+## Searching And Sprint Reporting
+
+`jira search --json` reports `total`, `isLast`, and `startAt` alongside the issues, so a truncated
+result is detectable rather than inferred. `isLast` is false when the walk stopped at `--limit`, and
+`total` is then Jira's approximate count for the query.
+
+```sh
+# Trim the response to the fields actually read
+atlassian jira search --jql "sprint = 42 AND status = Done" --fields key,summary,status,customfield_10105 --json
+
+# Same flag on sprint issue listing
+atlassian jira sprint issues 42 --fields key,summary,status
+```
+
+Story point rollups are opt-in, since they cost one pass over the sprint:
+
+```sh
+atlassian jira sprint get 42 --points --json
+# ... "points": { "committed": 47, "completed": 31, "field": "customfield_10105", "issueCount": 18, "unestimated": 2 }
+
+# Reported in the close preview and result too, measured before any rollover move
+atlassian jira sprint close 42 --points --issues PROJ-1,PROJ-2 --move-to-sprint 43
+```
+
+Completed points are those on issues whose status category is `done`. The story point field id
+varies by site: set `ATLASSIAN_STORY_POINTS_FIELD`, or pass `--points-field customfield_10105`.
+
 ## Attachments
 
 Upload one or more files to a Jira issue. Repeat `--file` for multiple uploads; the stored filename is the file's basename and the MIME type is inferred from its extension.

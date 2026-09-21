@@ -7,14 +7,15 @@ MCP server for Atlassian Cloud, built with [FastMCP](https://github.com/punkpeye
 | Tool | Description |
 |------|-------------|
 | `jira_get_issue` | Get a Jira issue by key or ID |
-| `jira_search_issues` | Search issues with JQL (auto-paginated), optional `limit` and `fields` |
+| `jira_search_issues` | Search issues with JQL (auto-paginated), optional `limit` and `fields`; returns `total` / `isLast` / `startAt` |
+| `jira_edit_issue` | Set fields on one issue or a batch, coerced from the issue's edit metadata; supports `dryRun` |
 | `jira_delete_issue` | Preview or delete a Jira issue with `force` + `confirm` |
-| `jira_get_sprint` | Get a Jira sprint by ID |
+| `jira_get_sprint` | Get a Jira sprint by ID, with an optional story point rollup (`includePoints`) |
 | `jira_list_sprints` | List sprints for a board, optionally filtered by state |
-| `jira_list_sprint_issues` | List all issues in a sprint (auto-paginated) |
+| `jira_list_sprint_issues` | List all issues in a sprint (auto-paginated), optional `fields` |
 | `jira_create_sprint` | Create a future sprint on a board |
 | `jira_edit_sprint` | Edit sprint metadata or state |
-| `jira_close_sprint` | Preview or close a sprint with `force` + `confirm`; can move issues first |
+| `jira_close_sprint` | Preview or close a sprint with `force` + `confirm`; can move issues first and report points |
 | `jira_rollover_sprint_issues` | Preview or move sprint issues to another sprint or the backlog with `force` + `confirm` |
 | `jira_add_attachment` | Upload file attachments to a Jira issue |
 | `confluence_get_page` | Get a Confluence page by ID |

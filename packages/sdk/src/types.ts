@@ -4,6 +4,8 @@ export const AtlassianConfigSchema = z.object({
   siteUrl: z.string().url("ATLASSIAN_SITE_URL must be a URL"),
   email: z.string().email("ATLASSIAN_EMAIL must be an email address"),
   apiToken: z.string().min(1, "ATLASSIAN_API_TOKEN is required"),
+  // Story point field ids differ per site, so the id is configuration rather than a constant.
+  storyPointsField: z.string().min(1).optional(),
 });
 
 export type AtlassianConfig = z.infer<typeof AtlassianConfigSchema>;
@@ -38,8 +40,21 @@ export const JiraSearchPageSchema = z.object({
 
 export type JiraSearchPage = z.infer<typeof JiraSearchPageSchema>;
 
+export const JiraApproximateCountSchema = z.object({
+  count: z.number(),
+}).passthrough();
+
+export type JiraApproximateCount = z.infer<typeof JiraApproximateCountSchema>;
+
 export interface JiraSearchResult {
   readonly issues: JiraIssue[];
+  /** Exact when `isLast`; otherwise Jira's approximate count for the query. */
+  readonly total: number;
+  /** False when the walk stopped at `limit` rather than exhausting the result set. */
+  readonly isLast: boolean;
+  /** Always 0. The enhanced search endpoint pages by token; reported for parity with sprint lists. */
+  readonly startAt: number;
+  readonly maxResults: number;
 }
 
 export interface JiraSearchOptions {
@@ -108,6 +123,22 @@ export type JiraSprintIssuePage = z.infer<typeof JiraSprintIssuePageSchema>;
 export interface JiraSprintIssueList {
   readonly total: number;
   readonly issues: JiraIssue[];
+}
+
+export const DEFAULT_JIRA_STORY_POINTS_FIELD = "customfield_10105";
+
+export interface JiraSprintPointsOptions {
+  /** Story point field id; defaults to the configured field, then DEFAULT_JIRA_STORY_POINTS_FIELD. */
+  readonly pointsField?: string;
+}
+
+export interface JiraSprintPoints {
+  readonly field: string;
+  readonly committed: number;
+  readonly completed: number;
+  readonly issueCount: number;
+  /** Issues carrying no numeric estimate, so a low `committed` is visible rather than silent. */
+  readonly unestimated: number;
 }
 
 export interface JiraSprintIssueListOptions {
@@ -186,4 +217,91 @@ export interface ConfluenceAttachmentUploadInput {
   readonly comment?: string;
   readonly minorEdit?: boolean;
   readonly createOnly?: boolean;
+}
+
+export const JiraFieldSchemaSchema = z.object({
+  type: z.string().optional(),
+  items: z.string().optional(),
+  custom: z.string().optional(),
+  customId: z.number().optional(),
+  system: z.string().optional(),
+}).passthrough();
+
+export type JiraFieldSchema = z.infer<typeof JiraFieldSchemaSchema>;
+
+export const JiraEditMetaFieldSchema = z.object({
+  required: z.boolean().optional(),
+  name: z.string().optional(),
+  key: z.string().optional(),
+  fieldId: z.string().optional(),
+  operations: z.array(z.string()).optional(),
+  schema: JiraFieldSchemaSchema.optional(),
+  allowedValues: z.array(z.unknown()).optional(),
+}).passthrough();
+
+export type JiraEditMetaField = z.infer<typeof JiraEditMetaFieldSchema>;
+
+export const JiraIssueEditMetaSchema = z.object({
+  fields: z.record(JiraEditMetaFieldSchema).default({}),
+}).passthrough();
+
+export type JiraIssueEditMeta = z.infer<typeof JiraIssueEditMetaSchema>;
+
+/** A field the issue's edit screen accepts, as reported back when a requested field is rejected. */
+export interface JiraSettableField {
+  readonly id: string;
+  readonly name?: string;
+  readonly type?: string;
+}
+
+/** One requested edit after its field was resolved and its value coerced to the API shape. */
+export interface JiraResolvedFieldEdit {
+  /** The field id or display name the caller asked for. */
+  readonly input: string;
+  readonly fieldId: string;
+  readonly name?: string;
+  readonly type?: string;
+  readonly value: unknown;
+}
+
+export interface JiraIssueEditPlan {
+  /** The `fields` object that would be sent to Jira. */
+  readonly fields: Record<string, unknown>;
+  readonly resolved: readonly JiraResolvedFieldEdit[];
+}
+
+/** Raw field edits keyed by field id or display name; values are coerced against the edit metadata. */
+export type JiraFieldEdits = Readonly<Record<string, unknown>>;
+
+export interface JiraIssueFieldEdits {
+  readonly key: string;
+  readonly fields: JiraFieldEdits;
+}
+
+export interface JiraIssueEditOptions {
+  /** Resolve and validate the payload without sending it. */
+  readonly dryRun?: boolean;
+  /** Jira notifies watchers by default; pass false to edit quietly. */
+  readonly notifyUsers?: boolean;
+}
+
+export interface JiraIssueEditResult extends JiraIssueEditPlan {
+  readonly key: string;
+  readonly status: "updated" | "dry_run";
+}
+
+export interface JiraIssueEditFailure {
+  readonly key: string;
+  readonly status: "error";
+  readonly code: string;
+  readonly message: string;
+  readonly details?: unknown;
+}
+
+export type JiraIssueEditEntry = JiraIssueEditResult | JiraIssueEditFailure;
+
+export interface JiraIssueEditBatchResult {
+  readonly updated: number;
+  readonly failed: number;
+  readonly results: readonly JiraIssueEditEntry[];
 }

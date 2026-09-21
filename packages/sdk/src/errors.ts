@@ -33,3 +33,14 @@ export class AtlassianRateLimitError extends AtlassianError {
     this.name = "AtlassianRateLimitError";
   }
 }
+
+/**
+ * A field edit rejected before it reached Jira. `details` carries what the caller needs to recover
+ * (the issue's settable fields, or a field's allowed values) rather than leaving them to retry blind.
+ */
+export class AtlassianFieldError extends AtlassianError {
+  constructor(message: string, code: string, details?: unknown) {
+    super(message, code, 400, details);
+    this.name = "AtlassianFieldError";
+  }
+}
