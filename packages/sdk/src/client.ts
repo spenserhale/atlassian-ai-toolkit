@@ -290,8 +290,8 @@ export class AtlassianClient {
     return JiraSprintSchema.parse(data);
   }
 
-  async listJiraSprints(boardId: string | number, opts: JiraSprintListOptions = {}): Promise<JiraSprintList> {
-    const path = `/rest/agile/1.0/board/${encodeURIComponent(String(boardId))}/sprint`;
+  async listJiraSprints(boardId?: string | number, opts: JiraSprintListOptions = {}): Promise<JiraSprintList> {
+    const path = `/rest/agile/1.0/board/${encodeURIComponent(String(this.resolveBoardId(boardId)))}/sprint`;
     const maxResults = opts.maxResults ?? 50;
     const values: JiraSprint[] = [];
     let startAt = 0;
@@ -312,6 +312,32 @@ export class AtlassianClient {
     }
 
     return { values, total: total ?? values.length, isLast: true, startAt: 0, maxResults };
+  }
+
+  /**
+   * Resolves a board-scoped argument against the configured default board, so callers can omit the
+   * board id once `ATLASSIAN_JIRA_BOARD_ID` (or the constructor config) names one.
+   */
+  private resolveBoardId(boardId: string | number | undefined): string | number {
+    const board = boardId ?? this.config.jiraBoardId;
+    if (board === undefined) throw new Error("boardId is required; pass a board id or set ATLASSIAN_JIRA_BOARD_ID");
+    return board;
+  }
+
+  /**
+   * Returns the sprint currently running on a board. A board running parallel sprints reports
+   * several active sprints; the earliest-started one is the current sprint. Throws when the board
+   * has no active sprint.
+   */
+  async getCurrentJiraSprint(boardId?: string | number): Promise<JiraSprint> {
+    const list = await this.listJiraSprints(this.resolveBoardId(boardId), { state: "active" });
+    // Jira start dates are ISO 8601, so lexicographic order is chronological; sprints without a
+    // start date sort last rather than masquerading as the oldest.
+    const current = [...list.values].sort((a, b) => (a.startDate ?? "\uffff").localeCompare(b.startDate ?? "\uffff"))[0];
+    if (current === undefined) {
+      throw new AtlassianError(`Board ${boardId ?? this.config.jiraBoardId} has no active sprint`, "NO_ACTIVE_SPRINT", 404);
+    }
+    return current;
   }
 
   async listJiraSprintIssues(sprintId: string | number, opts: JiraSprintIssueListOptions = {}): Promise<JiraSprintIssueList> {
@@ -369,7 +395,9 @@ export class AtlassianClient {
   }
 
   async createJiraSprint(input: CreateJiraSprintInput): Promise<JiraSprint> {
-    const data = await this.request<unknown>("POST", "/rest/agile/1.0/sprint", { body: input });
+    const data = await this.request<unknown>("POST", "/rest/agile/1.0/sprint", {
+      body: { ...input, originBoardId: Number(this.resolveBoardId(input.originBoardId)) },
+    });
     return JiraSprintSchema.parse(data);
   }
 

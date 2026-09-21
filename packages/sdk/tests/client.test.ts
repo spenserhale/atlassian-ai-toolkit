@@ -101,6 +101,49 @@ describe("AtlassianClient", () => {
     expect(calls[1]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/board/360/sprint?state=closed&startAt=50&maxResults=50");
   });
 
+  it("gets the earliest-started active sprint as the board's current sprint", async () => {
+    const calls = mockJsonFetch({
+      values: [
+        { id: 82, state: "active", name: "Sprint B", startDate: "2026-09-14T10:00:00.000Z" },
+        { id: 81, state: "active", name: "Sprint A", startDate: "2026-09-07T10:00:00.000Z" },
+      ],
+      isLast: true,
+    });
+
+    const sprint = await createClient().getCurrentJiraSprint(123);
+
+    expect(sprint).toMatchObject({ id: 81, state: "active", name: "Sprint A" });
+    expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/board/123/sprint?state=active&startAt=0&maxResults=50");
+  });
+
+  it("resolves the current sprint against the configured default board when no board id is passed", async () => {
+    const calls = mockJsonFetch({ values: [{ id: 81, state: "active", name: "Sprint A" }], isLast: true });
+    const client = new AtlassianClient({
+      siteUrl: "https://example.atlassian.net",
+      email: "user@example.com",
+      apiToken: "test-token",
+      jiraBoardId: 123,
+    });
+
+    const sprint = await client.getCurrentJiraSprint();
+
+    expect(sprint).toMatchObject({ id: 81, name: "Sprint A" });
+    expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/board/123/sprint?state=active&startAt=0&maxResults=50");
+  });
+
+  it("throws a hint when a board-scoped call has no board id argument or configured default", async () => {
+    await expect(createClient().getCurrentJiraSprint()).rejects.toThrow("set ATLASSIAN_JIRA_BOARD_ID");
+  });
+
+  it("throws when a board has no active sprint", async () => {
+    mockJsonFetch({ values: [], isLast: true });
+
+    await expect(createClient().getCurrentJiraSprint(123)).rejects.toMatchObject({
+      name: "AtlassianError",
+      code: "NO_ACTIVE_SPRINT",
+    });
+  });
+
   it("lists issues in a sprint in a single page", async () => {
     const calls = mockJsonFetch({
       startAt: 0,

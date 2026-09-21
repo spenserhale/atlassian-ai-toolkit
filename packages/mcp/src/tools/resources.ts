@@ -202,10 +202,27 @@ export function registerResourceTools(server: FastMCP) {
   });
 
   server.addTool({
+    name: "jira_get_current_sprint",
+    description:
+      "Get the sprint currently running on a Jira board. Throws when the board has no active sprint. Set includePoints for a committed/completed story point rollup.",
+    parameters: z.object({
+      boardId: z.number().int().positive().optional().describe("Jira board id; defaults to ATLASSIAN_JIRA_BOARD_ID when omitted"),
+      includePoints: z.boolean().default(false).describe("Include a committed/completed story point rollup; costs one pass over the sprint"),
+      pointsField: z.string().optional().describe("Story point field id; defaults to ATLASSIAN_STORY_POINTS_FIELD or customfield_10105"),
+    }),
+    execute: async (args) => {
+      const client = getClient();
+      const sprint = await client.getCurrentJiraSprint(args.boardId);
+      const points = await rollupPoints(client, sprint.id, args);
+      return JSON.stringify(points === undefined ? sprint : { ...sprint, points }, null, 2);
+    },
+  });
+
+  server.addTool({
     name: "jira_list_sprints",
     description: "List Jira sprints for a board, optionally filtered by state. Use to find active or future sprint ids.",
     parameters: z.object({
-      boardId: z.number().int().positive().describe("Jira board id"),
+      boardId: z.number().int().positive().optional().describe("Jira board id; defaults to ATLASSIAN_JIRA_BOARD_ID when omitted"),
       state: sprintStateSchema.optional().describe("Optional sprint state filter"),
     }),
     execute: async (args) => {
@@ -234,7 +251,7 @@ export function registerResourceTools(server: FastMCP) {
     name: "jira_create_sprint",
     description: "Create a future Jira sprint on a board. Returns the created sprint; no confirmation is required.",
     parameters: z.object({
-      originBoardId: z.number().int().positive().describe("Board where the sprint is created"),
+      originBoardId: z.number().int().positive().optional().describe("Board where the sprint is created; defaults to ATLASSIAN_JIRA_BOARD_ID when omitted"),
       name: z.string().min(1).describe("Sprint name"),
       goal: z.string().optional().describe("Sprint goal"),
       startDate: z.string().optional().describe("Sprint start date as accepted by Jira"),

@@ -6,6 +6,8 @@ export const AtlassianConfigSchema = z.object({
   apiToken: z.string().min(1, "ATLASSIAN_API_TOKEN is required"),
   // Story point field ids differ per site, so the id is configuration rather than a constant.
   storyPointsField: z.string().min(1).optional(),
+  // Default board for board-scoped sprint commands, so callers can omit the board id.
+  jiraBoardId: z.number().int().positive().optional(),
 });
 
 export type AtlassianConfig = z.infer<typeof AtlassianConfigSchema>;
@@ -147,7 +149,8 @@ export interface JiraSprintIssueListOptions {
 }
 
 export interface CreateJiraSprintInput {
-  readonly originBoardId: number;
+  /** Resolved against the configured default board (`ATLASSIAN_JIRA_BOARD_ID`) when omitted. */
+  readonly originBoardId?: number;
   readonly name: string;
   readonly startDate?: string;
   readonly endDate?: string;

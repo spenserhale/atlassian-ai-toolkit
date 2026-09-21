@@ -130,6 +130,18 @@ atlassian jira sprint close 42 --points --issues PROJ-1,PROJ-2 --move-to-sprint 
 Completed points are those on issues whose status category is `done`. The story point field id
 varies by site: set `ATLASSIAN_STORY_POINTS_FIELD`, or pass `--points-field customfield_10105`.
 
+Board-scoped sprint commands accept a default board, so the id does not have to be repeated:
+
+```sh
+export ATLASSIAN_JIRA_BOARD_ID=1234
+atlassian jira sprint current --points --json
+atlassian jira sprint list --state active
+atlassian jira sprint create --name "Sprint 43" --goal "Ship search"
+```
+
+An explicit board (`sprint current 42`, `--board 42`) still wins over the environment; without
+either, the command fails with a hint to set `ATLASSIAN_JIRA_BOARD_ID`.
+
 ## Attachments
 
 Upload one or more files to a Jira issue. Repeat `--file` for multiple uploads; the stored filename is the file's basename and the MIME type is inferred from its extension.

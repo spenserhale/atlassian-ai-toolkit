@@ -33,12 +33,12 @@ interface IssuesFlags extends JsonFlag {
 }
 
 interface ListFlags extends JsonFlag {
-  readonly board: string;
+  readonly board?: string;
   readonly state?: string;
 }
 
 interface CreateFlags extends JsonFlag {
-  readonly board: string;
+  readonly board?: string;
   readonly name: string;
   readonly goal?: string;
   readonly "start-date"?: string;
@@ -232,18 +232,47 @@ const getCommand = buildCommand({
   },
 });
 
+const currentCommand = buildCommand({
+  docs: { brief: "Get the active Jira sprint for a board" },
+  parameters: {
+    flags: {
+      points: { kind: "boolean", brief: "Include a committed/completed story point rollup", default: false },
+      "points-field": { kind: "parsed", parse: String, brief: "Story point field id; defaults to ATLASSIAN_STORY_POINTS_FIELD or customfield_10105", optional: true },
+      json: { kind: "boolean", brief: "Output as JSON", default: false },
+    },
+    positional: {
+      kind: "tuple",
+      parameters: [{ brief: "Board ID; defaults to ATLASSIAN_JIRA_BOARD_ID", parse: String, optional: true }],
+    },
+  },
+  async func(this: void, flags: PointsFlags, boardId: string | undefined) {
+    try {
+      const client = getClient();
+      const sprint = await client.getCurrentJiraSprint(boardId === undefined ? undefined : parseNumber(boardId, "board-id"));
+      const points = await rollupPoints(client, sprint.id, flags);
+      printResult(
+        points === undefined ? sprint : { ...sprint, points },
+        flags.json,
+        [formatSprint(sprint), ...formatPoints(points)].join("\n")
+      );
+    } catch (err) {
+      handleError(err, flags.json);
+    }
+  },
+});
+
 const listCommand = buildCommand({
   docs: { brief: "List Jira sprints for a board" },
   parameters: {
     flags: {
-      board: { kind: "parsed", parse: String, brief: "Board ID" },
+      board: { kind: "parsed", parse: String, brief: "Board ID; defaults to ATLASSIAN_JIRA_BOARD_ID", optional: true },
       state: { kind: "parsed", parse: String, brief: "Filter by state: future, active, or closed", optional: true },
       json: { kind: "boolean", brief: "Output as JSON", default: false },
     },
   },
   async func(this: void, flags: ListFlags) {
     try {
-      const result = await getClient().listJiraSprints(parseNumber(flags.board, "--board"), {
+      const result = await getClient().listJiraSprints(flags.board === undefined ? undefined : parseNumber(flags.board, "--board"), {
         state: parseState(flags.state),
       });
       const text = [`sprints[${result.values.length}]:`, ...result.values.map((sprint) => `- ${sprint.id}: ${sprint.name} (${sprint.state})`)].join("\n");
@@ -281,7 +310,7 @@ const createCommand = buildCommand({
   docs: { brief: "Create a future Jira sprint" },
   parameters: {
     flags: {
-      board: { kind: "parsed", parse: String, brief: "Origin board ID" },
+      board: { kind: "parsed", parse: String, brief: "Origin board ID; defaults to ATLASSIAN_JIRA_BOARD_ID", optional: true },
       name: { kind: "parsed", parse: String, brief: "Sprint name" },
       goal: { kind: "parsed", parse: String, brief: "Sprint goal", optional: true },
       "start-date": { kind: "parsed", parse: String, brief: "Sprint start date", optional: true },
@@ -292,7 +321,7 @@ const createCommand = buildCommand({
   async func(this: void, flags: CreateFlags) {
     try {
       const sprint = await getClient().createJiraSprint({
-        originBoardId: parseNumber(flags.board, "--board"),
+        originBoardId: flags.board === undefined ? undefined : parseNumber(flags.board, "--board"),
         name: flags.name,
         goal: flags.goal,
         startDate: flags["start-date"],
@@ -487,6 +516,7 @@ const rolloverCommand = buildCommand({
 export const jiraSprintRoutes = buildRouteMap({
   routes: {
     get: getCommand,
+    current: currentCommand,
     list: listCommand,
     issues: issuesCommand,
     create: createCommand,
