@@ -66,6 +66,58 @@ export ATLASSIAN_API_TOKEN="your-api-token"
 
 Create a scoped API token at <https://id.atlassian.com/manage-profile/security/api-tokens>.
 
+## Creating Issues
+
+Create an issue with the same field semantics as `jira edit`: the issue type and every field are
+resolved against the project's own create screen, so plain values work and a bad one is rejected
+before the write.
+
+```sh
+# Preview the full create payload without writing
+atlassian jira create --project DMP --type Bug --summary "Login times out" \
+  --description-file ./repro.md --field "Task Category=Support" --field "Priority=High" --dry-run --json
+
+# Create it, then hand the key to jira edit or jira attach
+atlassian jira create --project DMP --type Bug --summary "Login times out" --json
+# {"status":"created","key":"DMP-2470","id":"1234567","url":"https://your-site.atlassian.net/browse/DMP-2470", ...}
+
+# A sub-task, or an issue under an epic
+atlassian jira create --project DMP --type Sub-task --summary "Write the migration" --parent DMP-123
+
+# A reviewed batch in one command
+atlassian jira create --from-file issues.json --json
+```
+
+`--project` defaults to `ATLASSIAN_JIRA_PROJECT`. `--type` takes a display name (case-insensitive) or
+an id. `--description` / `--description-file` take markdown and are converted to ADF, which is what
+Jira's v3 API requires. Everything else goes through `--field <id|name>=<value>`, including priority,
+labels, assignee, story points, sprint, and custom fields; list fields take a comma-separated value
+(`--field labels=audit,login`) and a repeated `--field` is rejected rather than silently keeping the
+last value. An assignee given as an email address or display name is resolved to an account id.
+
+`issues.json` is `[{"project": "DMP", "issuetype": "Bug", "summary": "...", "fields": {...}}]`. Every
+record is attempted, results are reported per record, and the command exits non-zero if any record
+failed. A record key outside that set is rejected rather than ignored, so a field value put at the
+top level fails loudly instead of vanishing; with `--from-file`, `--project` is the default for
+records that name none and the other single-issue flags are refused.
+
+`project` and `issuetype` come from `--project` and `--type`, so passing either through `--field`
+is an error rather than a value the create would overwrite.
+
+Rejections carry what a retry needs, so no separate metadata call is required:
+
+| `code` | `details` |
+|--------|-----------|
+| `invalid_issue_type` | the project's real issue types |
+| `missing_required_field` | the required fields the payload left out, with their allowed values |
+| `field_not_settable` | the fields that issue type's create screen does accept |
+| `field_value_not_allowed` | the field's allowed values |
+| `invalid_parent` | Jira's own parent error |
+
+Creating is not destructive, so there is no `--force --confirm` gate. `--dry-run` resolves the whole
+payload against the create screen — including the ADF description and every coerced field — and
+prints it without sending, so a dry run shows exactly what the real create would write.
+
 ## Editing Issue Fields
 
 Set fields by id or display name. Values are coerced to the shape each field's schema requires, read
@@ -82,6 +134,10 @@ atlassian jira edit PROJ-123 --field customfield_10105=2
 # Apply a reviewed batch of corrections in one command
 atlassian jira edit --from-file edits.json --json
 ```
+
+Field values are coerced the same way on create and on edit: a markdown value for `description` or
+another rich-text field becomes ADF, `Sprint` takes a bare sprint id, `parent` takes an issue key,
+and an assignee takes an email address, display name, or account id.
 
 `edits.json` is `[{"key": "PROJ-123", "fields": {"Task Category": "Support", "customfield_10105": 2}}]`.
 Each key is attempted, per-key results are reported, and the command exits non-zero if any key

@@ -1,6 +1,7 @@
 import { buildApplication, buildRouteMap } from "@stricli/core";
 import { confluenceAttachmentRoutes } from "./commands/confluence-attachment.js";
 import { jiraAttachCommand } from "./commands/jira-attach.js";
+import { jiraCreateCommand } from "./commands/jira-create.js";
 import { confluenceDeleteCommand } from "./commands/confluence-delete.js";
 import { confluenceGetCommand } from "./commands/confluence-get.js";
 import { jiraDeleteCommand } from "./commands/jira-delete.js";
@@ -15,6 +16,7 @@ const jiraRoutes = buildRouteMap({
   routes: {
     get: jiraGetCommand,
     attach: jiraAttachCommand,
+    create: jiraCreateCommand,
     delete: jiraDeleteCommand,
     edit: jiraEditCommand,
     search: jiraSearchCommand,

@@ -360,6 +360,19 @@ describe("AtlassianClient", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("resolves an assignee email to an account id before editing", async () => {
+    const calls = mockSequentialJsonFetch([
+      { body: { fields: { assignee: { name: "Assignee", schema: { type: "user", system: "assignee" } } } } },
+      { body: [{ accountId: "5b10ac8d82e05b22cc7d4ef5", displayName: "Dana Scully", emailAddress: "dana@example.com", active: true }] },
+      { body: null, status: 204 },
+    ]);
+
+    await createClient().editJiraIssue("PROJ-1", { assignee: "dana@example.com" });
+
+    expect(calls[1]?.url).toContain("/rest/api/3/user/search?query=dana%40example.com");
+    expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ fields: { assignee: { accountId: "5b10ac8d82e05b22cc7d4ef5" } } });
+  });
+
   it("keeps editing the rest of a batch after one issue rejects a field", async () => {
     const calls = mockSequentialJsonFetch([
       { body: { fields: { summary: { name: "Summary", schema: { type: "string" } } } } },

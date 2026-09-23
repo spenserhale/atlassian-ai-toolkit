@@ -3,7 +3,11 @@ import {
   AtlassianErrorResponseSchema,
   DEFAULT_JIRA_STORY_POINTS_FIELD,
   JiraApproximateCountSchema,
+  JiraCreateMetaFieldPageSchema,
+  JiraCreateMetaIssueTypePageSchema,
+  JiraCreatedIssueSchema,
   JiraIssueEditMetaSchema,
+  JiraUserListSchema,
   ConfluenceAttachmentUploadResultSchema,
   ConfluencePageSchema,
   JiraAttachmentListSchema,
@@ -16,6 +20,14 @@ import {
 import type {
   AtlassianConfig,
   ConfluenceAttachmentUploadInput,
+  JiraCreateMetaIssueType,
+  JiraEditMetaField,
+  JiraIssueCreateBatchResult,
+  JiraIssueCreateEntry,
+  JiraIssueCreateInput,
+  JiraIssueCreateOptions,
+  JiraIssueCreateResult,
+  JiraUser,
   ConfluenceAttachmentUploadResult,
   ConfluencePage,
   CreateJiraSprintInput,
@@ -42,7 +54,7 @@ import type {
   UpdateJiraSprintInput,
 } from "./types.js";
 import { guessContentType } from "./content-type.js";
-import { planJiraIssueFieldEdits } from "./jira-fields.js";
+import { isJiraUserField, listMissingRequiredJiraFields, planJiraIssueFieldEdits, resolveJiraField } from "./jira-fields.js";
 import {
   AtlassianAuthError,
   AtlassianError,
@@ -98,6 +110,82 @@ function editFailureCode(err: unknown): string {
   return "unknown_error";
 }
 
+
+/**
+ * Jira account ids are opaque, but Atlassian Cloud issues two shapes: a 24-character hex id, and a
+ * `<prefix>:<uuid>` id. Matching those rather than any string with a colon keeps a display name that
+ * happens to contain one from being sent as an account id.
+ */
+function looksLikeAccountId(value: string): boolean {
+  return /^[0-9a-f]{24}$/i.test(value) || /^[a-z0-9]+:[0-9a-f-]{36}$/i.test(value);
+}
+
+function jiraFieldErrors(err: unknown): Record<string, string> | undefined {
+  if (!(err instanceof AtlassianError) || err.statusCode !== 400) return undefined;
+  const details = err.details;
+  if (typeof details !== "object" || details === null) return undefined;
+  const errors = (details as { errors?: unknown }).errors;
+  if (typeof errors !== "object" || errors === null) return undefined;
+  return errors as Record<string, string>;
+}
+
+/**
+ * Re-codes Jira's 400 on create into the case the caller can act on. Jira answers a bad parent, a
+ * missing required field, and a bad value with the same status, so the field error map is the only
+ * thing that separates them.
+ */
+function translateCreateError(err: unknown): unknown {
+  const errors = jiraFieldErrors(err);
+  if (errors === undefined) return err;
+
+  const parent = errors.parent;
+  if (parent !== undefined) return new AtlassianFieldError(parent, "invalid_parent", { errors });
+
+  // Jira words this as "Field 'x' is required" on some fields and "You must specify ..." on others.
+  const required = Object.entries(errors).filter(([, text]) => /is required|must specify/i.test(String(text)));
+  if (required.length > 0) {
+    return new AtlassianFieldError(
+      `Jira rejected the create: ${required.map(([, text]) => text).join("; ")}`,
+      "missing_required_field",
+      { requiredFields: required.map(([id]) => ({ id })), errors }
+    );
+  }
+
+  return new AtlassianFieldError(
+    `Jira rejected the create: ${Object.entries(errors).map(([id, text]) => `${id}: ${text}`).join("; ")}`,
+    "invalid_field_value",
+    { errors }
+  );
+}
+
+/** How long cached create metadata stays good. */
+const CREATE_META_TTL_MS = 10 * 60 * 1000;
+
+interface CacheEntry<T> {
+  readonly value: T;
+  readonly expires: number;
+}
+
+function cacheRead<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefined {
+  const entry = cache.get(key);
+  if (entry === undefined) return undefined;
+  if (entry.expires <= Date.now()) {
+    cache.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function cacheWrite<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T): T {
+  cache.set(key, { value, expires: Date.now() + CREATE_META_TTL_MS });
+  return value;
+}
+
+/** Jira takes a project by key or by id, and a numeric key is never valid. */
+function projectRef(project: string): Record<string, string> {
+  return /^\d+$/.test(project) ? { id: project } : { key: project };
+}
+
 /** Jira allows fractional points, and repeated float addition drifts. */
 function roundPoints(value: number): number {
   return Math.round(value * 100) / 100;
@@ -113,6 +201,13 @@ function isDoneIssue(issue: JiraIssue): boolean {
 
 export class AtlassianClient {
   private readonly config: AtlassianConfig;
+  /**
+   * A create needs two metadata lookups before it writes anything, so a batch into one project pays
+   * for them once. The entries expire because an MCP server holds one client for hours and a create
+   * screen can change under it; a CLI run never lives long enough to reach the timeout.
+   */
+  private readonly issueTypeCache = new Map<string, CacheEntry<JiraCreateMetaIssueType[]>>();
+  private readonly createMetaCache = new Map<string, CacheEntry<JiraIssueEditMeta>>();
 
   constructor(config: Partial<AtlassianConfig> & { siteUrl: string; email: string; apiToken: string }) {
     this.config = AtlassianConfigSchema.parse(config);
@@ -245,7 +340,7 @@ export class AtlassianClient {
    */
   async editJiraIssue(issueIdOrKey: string, edits: JiraFieldEdits, opts: JiraIssueEditOptions = {}): Promise<JiraIssueEditResult> {
     const meta = await this.getJiraIssueEditMeta(issueIdOrKey);
-    const plan = planJiraIssueFieldEdits(meta, edits);
+    const plan = planJiraIssueFieldEdits(meta, await this.resolveUserFieldValues(meta, edits));
 
     if (opts.dryRun === true) return { key: issueIdOrKey, status: "dry_run", ...plan };
 
@@ -280,6 +375,247 @@ export class AtlassianClient {
 
     return {
       updated: results.filter((result) => result.status !== "error").length,
+      failed: results.filter((result) => result.status === "error").length,
+      results,
+    };
+  }
+
+  /** Project key or id for a project-scoped call, falling back to the configured default. */
+  private resolveProject(project?: string): string {
+    const resolved = project?.trim() !== undefined && project.trim().length > 0 ? project.trim() : this.config.jiraProject;
+    if (resolved === undefined) throw new Error("project is required; pass a project key or set ATLASSIAN_JIRA_PROJECT");
+    return resolved;
+  }
+
+  private browseUrl(key: string): string {
+    return new URL(`/browse/${encodeURIComponent(key)}`, this.config.siteUrl).toString();
+  }
+
+  /** Issue types on a project's create screen, cached per client. */
+  async listJiraIssueTypes(projectIdOrKey?: string): Promise<JiraCreateMetaIssueType[]> {
+    const project = this.resolveProject(projectIdOrKey);
+    const cached = cacheRead(this.issueTypeCache, project);
+    if (cached !== undefined) return cached;
+
+    const path = `/rest/api/3/issue/createmeta/${encodeURIComponent(project)}/issuetypes`;
+    const values: JiraCreateMetaIssueType[] = [];
+    const maxResults = 50;
+    let startAt = 0;
+    for (;;) {
+      const data = await this.request<unknown>("GET", path, { query: { startAt, maxResults } });
+      const page = JiraCreateMetaIssueTypePageSchema.parse(data);
+      values.push(...page.values);
+      // A short page is the last page; without this a server that ignores startAt would loop. The
+      // page's own maxResults wins, since Jira may cap the page below what was asked for.
+      if (page.values.length < (page.maxResults ?? maxResults)) break;
+      if (page.total !== undefined && values.length >= page.total) break;
+      startAt += page.values.length;
+    }
+
+    return cacheWrite(this.issueTypeCache, project, values);
+  }
+
+  /** Resolves an issue type by id or display name, reporting the project's real types on a miss. */
+  async resolveJiraIssueType(projectIdOrKey: string | undefined, issueType: string): Promise<JiraCreateMetaIssueType> {
+    const project = this.resolveProject(projectIdOrKey);
+    const types = await this.listJiraIssueTypes(project);
+    const wanted = issueType.trim().toLowerCase();
+    const match = types.find((type) => type.id === issueType.trim()) ?? types.find((type) => type.name.trim().toLowerCase() === wanted);
+    if (match !== undefined) return match;
+
+    throw new AtlassianFieldError(`"${issueType}" is not an issue type in ${project}`, "invalid_issue_type", {
+      project,
+      issueTypes: types.map((type) => ({ id: type.id, name: type.name, subtask: type.subtask })),
+    });
+  }
+
+  /**
+   * The create screen for one issue type, in the same shape `editmeta` reports, so field resolution
+   * and value coercion are the same code on create as on edit.
+   */
+  async getJiraCreateMeta(projectIdOrKey: string | undefined, issueTypeId: string): Promise<JiraIssueEditMeta> {
+    const project = this.resolveProject(projectIdOrKey);
+    const cacheKey = `${project}:${issueTypeId}`;
+    const cached = cacheRead(this.createMetaCache, cacheKey);
+    if (cached !== undefined) return cached;
+
+    const path = `/rest/api/3/issue/createmeta/${encodeURIComponent(project)}/issuetypes/${encodeURIComponent(issueTypeId)}`;
+    const fields: Record<string, JiraEditMetaField> = {};
+    const maxResults = 50;
+    let startAt = 0;
+    let seen = 0;
+    for (;;) {
+      const data = await this.request<unknown>("GET", path, { query: { startAt, maxResults } });
+      const page = JiraCreateMetaFieldPageSchema.parse(data);
+      for (const field of page.values) {
+        const id = field.fieldId ?? field.key;
+        if (id !== undefined) fields[id] = field;
+      }
+      seen += page.values.length;
+      if (page.values.length < (page.maxResults ?? maxResults)) break;
+      if (page.total !== undefined && seen >= page.total) break;
+      startAt += page.values.length;
+    }
+
+    return cacheWrite(this.createMetaCache, cacheKey, JiraIssueEditMetaSchema.parse({ fields }));
+  }
+
+  async searchJiraUsers(query: string): Promise<JiraUser[]> {
+    const data = await this.request<unknown>("GET", "/rest/api/3/user/search", {
+      query: { query: requireNonEmpty(query, "query"), maxResults: 50 },
+    });
+    return JiraUserListSchema.parse(data);
+  }
+
+  /**
+   * Turns an email address or display name into the account id Jira wants, so a caller does not
+   * have to look one up first. An account id is passed straight through.
+   */
+  async resolveJiraAccountId(input: string): Promise<string> {
+    const query = input.trim();
+    if (looksLikeAccountId(query)) return query;
+
+    const users = (await this.searchJiraUsers(query)).filter((user) => user.active !== false);
+    const wanted = query.toLowerCase();
+    const byEmail = users.filter((user) => user.emailAddress?.trim().toLowerCase() === wanted);
+    const byName = users.filter((user) => user.displayName?.trim().toLowerCase() === wanted);
+    const candidates = byEmail.length > 0 ? byEmail : byName.length > 0 ? byName : users;
+
+    const first = candidates[0];
+    if (first === undefined) throw new AtlassianFieldError(`No Jira user matches "${input}"`, "user_not_found", { query: input });
+    if (candidates.length > 1) {
+      throw new AtlassianFieldError(`"${input}" matches ${candidates.length} Jira users; pass the account id`, "user_ambiguous", {
+        query: input,
+        candidates: candidates.map((user) => ({ accountId: user.accountId, displayName: user.displayName, emailAddress: user.emailAddress })),
+      });
+    }
+    return first.accountId;
+  }
+
+  /**
+   * Rewrites user-field values that are emails or display names into account ids before planning.
+   * Fields that cannot be resolved are left alone so planning reports the real error for them.
+   */
+  private async resolveUserFieldValues(meta: JiraIssueEditMeta, edits: JiraFieldEdits): Promise<JiraFieldEdits> {
+    const resolved: Record<string, unknown> = { ...edits };
+
+    for (const [input, raw] of Object.entries(edits)) {
+      if (typeof raw !== "string" || raw.trim().length === 0 || raw.startsWith("json:")) continue;
+
+      let field: JiraEditMetaField;
+      try {
+        field = resolveJiraField(meta, input).field;
+      } catch {
+        continue;
+      }
+      if (!isJiraUserField(field)) continue;
+
+      if (field.schema?.type === "array") {
+        const names = raw.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+        const accountIds: string[] = [];
+        for (const name of names) accountIds.push(await this.resolveJiraAccountId(name));
+        resolved[input] = accountIds;
+        continue;
+      }
+      resolved[input] = await this.resolveJiraAccountId(raw);
+    }
+
+    return resolved;
+  }
+
+  /**
+   * Creates one issue. The issue type and every field are resolved against the project's create
+   * screen first, so a value that cannot work is rejected with the allowed options before the write
+   * rather than as a bare Jira 400 afterwards. `dryRun` returns the full resolved payload unsent.
+   */
+  async createJiraIssue(input: JiraIssueCreateInput, opts: JiraIssueCreateOptions = {}): Promise<JiraIssueCreateResult> {
+    const project = this.resolveProject(input.project);
+    const issueType = await this.resolveJiraIssueType(project, input.issueType);
+    const meta = await this.getJiraCreateMeta(project, issueType.id);
+
+    const requested: Record<string, unknown> = { ...input.fields };
+    // The shorthands are the same fields under fixed names, so a collision is reported rather than
+    // silently resolved in favour of one of them.
+    for (const [name, value] of [["summary", input.summary], ["description", input.description], ["parent", input.parent]] as const) {
+      if (value === undefined) continue;
+      if (name in requested) throw new AtlassianFieldError(`${name} was given twice`, "field_duplicated", { field: name });
+      requested[name] = value;
+    }
+
+    const plan = Object.keys(requested).length === 0
+      ? { fields: {}, resolved: [] }
+      : planJiraIssueFieldEdits(meta, await this.resolveUserFieldValues(meta, requested), `${issueType.name} in ${project}`);
+
+    // project and issuetype are set from the resolved project and issue type, so a caller field
+    // that would be overwritten by them is an error instead of a value that is quietly dropped.
+    for (const reserved of ["project", "issuetype"]) {
+      if (reserved in plan.fields) {
+        throw new AtlassianFieldError(
+          `${reserved} is set from the issue's project and type, not as a field`,
+          "field_not_settable",
+          { field: reserved, project, issueType: { id: issueType.id, name: issueType.name } }
+        );
+      }
+    }
+
+    const missing = listMissingRequiredJiraFields(meta, Object.keys(plan.fields));
+    if (missing.length > 0) {
+      throw new AtlassianFieldError(
+        `${issueType.name} in ${project} requires ${missing.map((field) => field.name ?? field.id).join(", ")}`,
+        "missing_required_field",
+        { project, issueType: { id: issueType.id, name: issueType.name }, requiredFields: missing }
+      );
+    }
+
+    // One payload for both paths, so a dry run prints exactly the body the create would send.
+    const base = {
+      project,
+      issueType: { id: issueType.id, name: issueType.name, subtask: issueType.subtask },
+      resolved: plan.resolved,
+      fields: { ...plan.fields, project: projectRef(project), issuetype: { id: issueType.id } },
+    };
+    if (opts.dryRun === true) return { ...base, status: "dry_run" };
+
+    const created = await this.postJiraIssue(base.fields);
+    return { ...base, status: "created", key: created.key, id: created.id, url: this.browseUrl(created.key) };
+  }
+
+  private async postJiraIssue(fields: Record<string, unknown>) {
+    try {
+      const data = await this.request<unknown>("POST", "/rest/api/3/issue", { body: { fields } });
+      return JiraCreatedIssueSchema.parse(data);
+    } catch (err) {
+      throw translateCreateError(err);
+    }
+  }
+
+  /**
+   * Creates several issues, reporting per record and continuing past failures, so one bad record in
+   * a reviewed batch does not strand the rest. Metadata lookups are shared across the batch.
+   */
+  async createJiraIssues(inputs: readonly JiraIssueCreateInput[], opts: JiraIssueCreateOptions = {}): Promise<JiraIssueCreateBatchResult> {
+    if (inputs.length === 0) throw new AtlassianFieldError("Provide at least one issue to create", "field_required");
+
+    const results: JiraIssueCreateEntry[] = [];
+    for (const [index, input] of inputs.entries()) {
+      try {
+        results.push({ index, ...(await this.createJiraIssue(input, opts)) });
+      } catch (err) {
+        results.push({
+          status: "error",
+          index,
+          project: input.project ?? this.config.jiraProject,
+          issueType: input.issueType,
+          summary: input.summary ?? (typeof input.fields?.summary === "string" ? input.fields.summary : undefined),
+          code: editFailureCode(err),
+          message: err instanceof Error ? err.message : String(err),
+          details: err instanceof AtlassianError ? err.details : undefined,
+        });
+      }
+    }
+
+    return {
+      created: results.filter((result) => result.status !== "error").length,
       failed: results.filter((result) => result.status === "error").length,
       results,
     };

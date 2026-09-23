@@ -5,6 +5,7 @@ import { z } from "zod";
 import { AtlassianClient, AtlassianNotFoundError, JIRA_SPRINT_ISSUE_MOVE_LIMIT, resolveConfig } from "@atlassian-ai-toolkit/sdk";
 import type {
   JiraAttachmentUpload,
+  JiraIssueCreateInput,
   JiraIssueFieldEdits,
   JiraSprintIssueMoveResult,
   JiraSprintPoints,
@@ -180,6 +181,66 @@ export function registerResourceTools(server: FastMCP) {
       if (args.issueIdOrKey === undefined) throw new Error("Provide issueIdOrKey with fields, or edits for a batch");
       if (args.fields === undefined) throw new Error("Provide at least one field to edit");
       const result = await client.editJiraIssue(args.issueIdOrKey, args.fields, opts);
+      return JSON.stringify(result, null, 2);
+    },
+  });
+
+  server.addTool({
+    name: "jira_create_issue",
+    description:
+      "Create one Jira issue, or a batch of them. The issue type and every field are resolved against the project's create screen, so pass plain values (\"Bug\", \"Support\", 2, \"a,b\") rather than Jira payload objects, and a markdown description is converted to ADF. Set dryRun to see the full resolved payload without writing. Returns the new issue key, id, and browse URL. A rejected create reports the project's issue types, the required fields, or the settable fields, so the retry needs no extra metadata call.",
+    parameters: z.object({
+      project: z.string().optional().describe("Project key or id; defaults to ATLASSIAN_JIRA_PROJECT"),
+      issueType: z.string().optional().describe("Issue type display name or id, for example Bug, Story, Sub-task"),
+      summary: z.string().optional().describe("Issue summary"),
+      description: z.string().optional().describe("Issue description as markdown; converted to ADF"),
+      parent: z.string().optional().describe("Parent issue key, for a sub-task or an issue under an epic"),
+      fields: z.record(z.unknown()).optional().describe("Other field values keyed by field id or display name, for example { \"Task Category\": \"Support\", \"Priority\": \"High\" }"),
+      issues: z
+        .array(
+          z.object({
+            project: z.string().optional().describe("Project key or id; defaults to ATLASSIAN_JIRA_PROJECT"),
+            issueType: z.string().min(1).describe("Issue type display name or id"),
+            summary: z.string().optional().describe("Issue summary"),
+            description: z.string().optional().describe("Issue description as markdown"),
+            parent: z.string().optional().describe("Parent issue key"),
+            fields: z.record(z.unknown()).optional().describe("Other field values keyed by field id or display name"),
+          })
+        )
+        .optional()
+        .describe("Batch of issues to create; failures are reported per record and do not abort the batch"),
+      dryRun: z.boolean().default(false).describe("Resolve and validate the payload without creating anything"),
+    }),
+    execute: async (args) => {
+      const client = getClient();
+      const opts = { dryRun: args.dryRun };
+
+      if (args.issues !== undefined && args.issues.length > 0) {
+        const conflicting = (["issueType", "summary", "description", "parent", "fields"] as const).filter((name) => args[name] !== undefined);
+        if (conflicting.length > 0) {
+          throw new Error(`Pass either a single issue or issues, not both (got: ${conflicting.join(", ")}); project is the batch default`);
+        }
+        // A top-level project is the default for records that do not name one, matching the CLI.
+        const records = (args.issues as JiraIssueCreateInput[]).map((issue) => ({ ...issue, project: issue.project ?? args.project }));
+        const batch = await client.createJiraIssues(records, opts);
+        return JSON.stringify({
+          status: batch.failed > 0 ? (batch.created > 0 ? "partial" : "error") : args.dryRun ? "dry_run" : "created",
+          ...batch,
+        }, null, 2);
+      }
+
+      if (args.issueType === undefined) throw new Error("Provide issueType, or issues for a batch");
+      const result = await client.createJiraIssue(
+        {
+          project: args.project,
+          issueType: args.issueType,
+          summary: args.summary,
+          description: args.description,
+          parent: args.parent,
+          fields: args.fields,
+        },
+        opts
+      );
       return JSON.stringify(result, null, 2);
     },
   });

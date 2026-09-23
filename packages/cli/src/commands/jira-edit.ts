@@ -1,15 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { buildCommand } from "@stricli/core";
-import {
-  AtlassianAuthError,
-  AtlassianClient,
-  AtlassianError,
-  AtlassianFieldError,
-  AtlassianNotFoundError,
-  AtlassianRateLimitError,
-  resolveConfig,
-} from "@atlassian-ai-toolkit/sdk";
-import type { JiraIssueEditEntry, JiraIssueFieldEdits, JiraResolvedFieldEdit } from "@atlassian-ai-toolkit/sdk";
+import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
+import type { JiraIssueEditEntry, JiraIssueFieldEdits } from "@atlassian-ai-toolkit/sdk";
+import { handleError } from "../errors.js";
+import { formatResolved, parseFieldFlags } from "../fields.js";
 
 interface EditFlags {
   readonly field: readonly string[];
@@ -17,25 +11,6 @@ interface EditFlags {
   readonly "dry-run": boolean;
   readonly json: boolean;
   readonly notify: boolean;
-}
-
-/** Splits `customfield_13841=Support` at the first `=` so values can contain their own. */
-function parseFieldAssignment(assignment: string): [string, string] {
-  const separator = assignment.indexOf("=");
-  if (separator <= 0) throw new Error(`--field must be <id|name>=<value> (got: "${assignment}")`);
-  const field = assignment.slice(0, separator).trim();
-  if (field.length === 0) throw new Error(`--field must be <id|name>=<value> (got: "${assignment}")`);
-  return [field, assignment.slice(separator + 1)];
-}
-
-function parseFieldFlags(assignments: readonly string[]): Record<string, unknown> {
-  const fields: Record<string, unknown> = {};
-  for (const assignment of assignments) {
-    const [field, value] = parseFieldAssignment(assignment);
-    if (field in fields) throw new Error(`--field ${field} was given more than once`);
-    fields[field] = value;
-  }
-  return fields;
 }
 
 function parseEditsFile(raw: string, path: string): JiraIssueFieldEdits[] {
@@ -55,33 +30,6 @@ function parseEditsFile(raw: string, path: string): JiraIssueFieldEdits[] {
     }
     return { key: record.key, fields: record.fields as Record<string, unknown> };
   });
-}
-
-function errorCode(err: unknown): string {
-  if (err instanceof AtlassianFieldError) return err.code;
-  if (err instanceof AtlassianAuthError) return "auth_error";
-  if (err instanceof AtlassianNotFoundError) return "not_found";
-  if (err instanceof AtlassianRateLimitError) return "rate_limited";
-  if (err instanceof AtlassianError) return "upstream_error";
-  return "usage_error";
-}
-
-function handleError(err: unknown, json: boolean): never {
-  const message = err instanceof Error ? err.message : String(err);
-  if (json) {
-    // Field errors carry the recovery data (settable fields, allowed values), so keep the details.
-    console.log(JSON.stringify({ status: "error", code: errorCode(err), message, details: err instanceof AtlassianError ? err.details : undefined }, null, 2));
-  } else {
-    console.error(`error: ${message}`);
-    if (err instanceof AtlassianError && err.details !== undefined && err.details !== null) {
-      console.error(`details: ${JSON.stringify(err.details)}`);
-    }
-  }
-  process.exit(1);
-}
-
-function formatResolved(resolved: readonly JiraResolvedFieldEdit[]): string[] {
-  return resolved.map((edit) => `- ${edit.fieldId}${edit.name ? ` (${edit.name})` : ""}: ${JSON.stringify(edit.value)}`);
 }
 
 function formatEntry(entry: JiraIssueEditEntry): string {

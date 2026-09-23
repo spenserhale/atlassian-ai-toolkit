@@ -1,9 +1,11 @@
+import { markdownToAdf } from "./adf.js";
 import { AtlassianFieldError } from "./errors.js";
 import type {
   JiraEditMetaField,
   JiraFieldEdits,
   JiraIssueEditMeta,
   JiraIssueEditPlan,
+  JiraRequiredFieldGap,
   JiraResolvedFieldEdit,
   JiraSettableField,
 } from "./types.js";
@@ -16,6 +18,43 @@ const NAME_KEYED_TYPES = new Set(["priority", "resolution", "issuetype", "status
 
 /** Field schema types whose value is sent as a bare string. */
 const STRING_TYPES = new Set(["string", "date", "datetime", "any"]);
+
+/** System fields Jira stores as an Atlassian Document, where a plain string is rejected. */
+const ADF_SYSTEM_FIELDS = new Set(["description", "environment"]);
+
+/** Custom field types Jira stores as an Atlassian Document. */
+const ADF_CUSTOM_TYPES = new Set([
+  "com.atlassian.jira.plugin.system.customfieldtypes:textarea",
+  "com.atlassian.jira.plugin.system.customfieldtypes:readonlyfield",
+]);
+
+/** The agile sprint field, whose write shape does not follow its own published schema. */
+const SPRINT_CUSTOM_TYPE = "com.pyxis.greenhopper.jira:gh-sprint";
+
+function isAdfField(field: JiraEditMetaField): boolean {
+  const schema = field.schema;
+  if (schema === undefined) return false;
+  // Jira reports rich text as `doc` on newer screens and as a system or custom field type on older
+  // ones, so all three are checked rather than the type alone.
+  if (schema.type === "doc") return true;
+  if (schema.system !== undefined && ADF_SYSTEM_FIELDS.has(schema.system)) return true;
+  return schema.custom !== undefined && ADF_CUSTOM_TYPES.has(schema.custom);
+}
+
+/**
+ * The sprint field publishes `array` of `json` but accepts only a single sprint id on write, so the
+ * schema-driven table would send an array Jira rejects with "Number value expected".
+ */
+function isSprintField(field: JiraEditMetaField): boolean {
+  return field.schema?.custom === SPRINT_CUSTOM_TYPE;
+}
+
+/** True when the field holds a user, whose value has to be an account id rather than a name. */
+export function isJiraUserField(field: JiraEditMetaField): boolean {
+  const schema = field.schema;
+  if (schema?.type === "user") return true;
+  return schema?.type === "array" && schema.items === "user";
+}
 
 /** Every field the issue's edit screen accepts, which is what `editmeta` reports. */
 export function listSettableJiraFields(meta: JiraIssueEditMeta): JiraSettableField[] {
@@ -75,6 +114,8 @@ function coerceScalar(fieldId: string, field: JiraEditMetaField, type: string | 
   if (type === "option" || type === "option-with-child") return { value: matchAllowedValue(fieldId, field, String(raw)) };
   if (type === "user") return { accountId: String(raw) };
   if (type === "project") return { key: String(raw) };
+  // `parent` and other issue links are named by issue key.
+  if (type === "issuelink") return { key: String(raw) };
   if (type !== undefined && NAME_KEYED_TYPES.has(type)) return { name: matchAllowedValue(fieldId, field, String(raw)) };
   if (type === undefined || STRING_TYPES.has(type)) return String(raw);
   return String(raw);
@@ -106,6 +147,12 @@ export function coerceJiraFieldValue(fieldId: string, field: JiraEditMetaField, 
   if (raw === null || raw === undefined) return null;
   if (typeof raw === "string" && raw.startsWith(JSON_VALUE_PREFIX)) return parseJsonValue(fieldId, raw.slice(JSON_VALUE_PREFIX.length));
 
+  // A document a caller already built, like any other object value, is taken as the API shape.
+  if (isAdfField(field)) return typeof raw === "string" ? markdownToAdf(raw) : raw;
+  if (isSprintField(field)) {
+    return typeof raw === "object" ? raw : coerceNumber(fieldId, field, raw);
+  }
+
   const type = field.schema?.type;
   if (type === "array") {
     const items = field.schema?.items;
@@ -114,8 +161,11 @@ export function coerceJiraFieldValue(fieldId: string, field: JiraEditMetaField, 
   return coerceScalar(fieldId, field, type, raw);
 }
 
-/** Resolves a field id or display name against the issue's edit screen. */
-export function resolveJiraField(meta: JiraIssueEditMeta, input: string): { fieldId: string; field: JiraEditMetaField } {
+/**
+ * Resolves a field id or display name against a screen's fields. `subject` names the screen in the
+ * error, since the same lookup backs an issue's edit screen and an issue type's create screen.
+ */
+export function resolveJiraField(meta: JiraIssueEditMeta, input: string, subject = "this issue"): { fieldId: string; field: JiraEditMetaField } {
   const direct = meta.fields[input];
   if (direct !== undefined) return { fieldId: input, field: direct };
 
@@ -127,7 +177,7 @@ export function resolveJiraField(meta: JiraIssueEditMeta, input: string): { fiel
   }
   if (matches.length > 1) {
     throw new AtlassianFieldError(
-      `"${input}" matches more than one field on this issue; use the field id`,
+      `"${input}" matches more than one field on ${subject}; use the field id`,
       "field_ambiguous",
       { field: input, candidates: matches.map(([id, field]) => ({ id, name: field.name })) }
     );
@@ -136,21 +186,21 @@ export function resolveJiraField(meta: JiraIssueEditMeta, input: string): { fiel
   // Jira rejects the whole edit when one field is unsettable on the issue type (Story Points is
   // absent from Sub-task, Epic, and Jira Task screens), so the settable list is the recovery path.
   throw new AtlassianFieldError(
-    `"${input}" is not a field that can be set on this issue`,
+    `"${input}" is not a field that can be set on ${subject}`,
     "field_not_settable",
     { field: input, settableFields: listSettableJiraFields(meta) }
   );
 }
 
 /** Resolves and coerces every requested edit into the `fields` body Jira expects. */
-export function planJiraIssueFieldEdits(meta: JiraIssueEditMeta, edits: JiraFieldEdits): JiraIssueEditPlan {
+export function planJiraIssueFieldEdits(meta: JiraIssueEditMeta, edits: JiraFieldEdits, subject = "this issue"): JiraIssueEditPlan {
   const entries = Object.entries(edits);
   if (entries.length === 0) throw new AtlassianFieldError("Provide at least one field to edit", "field_required");
 
   const fields: Record<string, unknown> = {};
   const resolved: JiraResolvedFieldEdit[] = [];
   for (const [input, raw] of entries) {
-    const { fieldId, field } = resolveJiraField(meta, input);
+    const { fieldId, field } = resolveJiraField(meta, input, subject);
     if (fieldId in fields) {
       throw new AtlassianFieldError(`${fieldId} was given more than once`, "field_duplicated", { field: fieldId });
     }
@@ -159,4 +209,26 @@ export function planJiraIssueFieldEdits(meta: JiraIssueEditMeta, edits: JiraFiel
     resolved.push({ input, fieldId, name: field.name, type: field.schema?.type, value });
   }
   return { fields, resolved };
+}
+
+/** Every field the create screen requires and will not fill in itself. */
+export function listRequiredJiraFields(meta: JiraIssueEditMeta): JiraSettableField[] {
+  return Object.entries(meta.fields)
+    .filter(([id, field]) => field.required === true && field.hasDefaultValue !== true && id !== "project" && id !== "issuetype")
+    .map(([id, field]) => ({ id, name: field.name, type: field.schema?.type }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Required fields the planned payload does not set. Reported before the create so the caller gets
+ * the field list and its options back in one round trip rather than a bare Jira 400.
+ */
+export function listMissingRequiredJiraFields(meta: JiraIssueEditMeta, plannedFieldIds: readonly string[]): JiraRequiredFieldGap[] {
+  const planned = new Set(plannedFieldIds);
+  return listRequiredJiraFields(meta)
+    .filter((field) => !planned.has(field.id))
+    .map((field) => {
+      const allowed = allowedValueLabels(meta.fields[field.id] ?? {});
+      return allowed.length > 0 ? { ...field, allowedValues: allowed } : field;
+    });
 }

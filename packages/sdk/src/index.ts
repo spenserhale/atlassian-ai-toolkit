@@ -1,9 +1,14 @@
 export { AtlassianClient, JIRA_SPRINT_ISSUE_MOVE_LIMIT } from "./client.js";
 export type { JiraAttachmentUpload } from "./client.js";
 export { resolveConfig } from "./config.js";
+export { isAdfDocument, markdownToAdf } from "./adf.js";
+export type { AdfDocument, AdfNode } from "./adf.js";
 export { guessContentType } from "./content-type.js";
 export {
   coerceJiraFieldValue,
+  isJiraUserField,
+  listMissingRequiredJiraFields,
+  listRequiredJiraFields,
   listSettableJiraFields,
   planJiraIssueFieldEdits,
   resolveJiraField,
@@ -25,10 +30,22 @@ export type {
   CreateJiraSprintInput,
   JiraApproximateCount,
   JiraAttachment,
+  JiraCreateMetaFieldPage,
+  JiraCreateMetaIssueType,
+  JiraCreateMetaIssueTypePage,
+  JiraCreatedIssue,
   JiraEditMetaField,
   JiraFieldEdits,
   JiraFieldSchema,
   JiraIssue,
+  JiraIssueCreateBatchResult,
+  JiraIssueCreateEntry,
+  JiraIssueCreateFailure,
+  JiraIssueCreateInput,
+  JiraIssueCreateIssueType,
+  JiraIssueCreateOptions,
+  JiraIssueCreatePlan,
+  JiraIssueCreateResult,
   JiraIssueEditBatchResult,
   JiraIssueEditEntry,
   JiraIssueEditFailure,
@@ -37,6 +54,7 @@ export type {
   JiraIssueEditPlan,
   JiraIssueEditResult,
   JiraIssueFieldEdits,
+  JiraRequiredFieldGap,
   JiraResolvedFieldEdit,
   JiraSearchOptions,
   JiraSearchPage,
@@ -53,6 +71,7 @@ export type {
   JiraSprintPoints,
   JiraSprintPointsOptions,
   JiraSprintState,
+  JiraUser,
   MoveJiraSprintIssuesInput,
   UpdateJiraSprintInput,
 } from "./types.js";
@@ -66,6 +85,11 @@ export {
   JiraApproximateCountSchema,
   JiraAttachmentListSchema,
   JiraAttachmentSchema,
+  JiraCreateMetaFieldPageSchema,
+  JiraCreateMetaFieldSchema,
+  JiraCreateMetaIssueTypePageSchema,
+  JiraCreateMetaIssueTypeSchema,
+  JiraCreatedIssueSchema,
   JiraEditMetaFieldSchema,
   JiraFieldSchemaSchema,
   JiraIssueEditMetaSchema,
@@ -75,4 +99,6 @@ export {
   JiraSprintListSchema,
   JiraSprintSchema,
   JiraSprintStateSchema,
+  JiraUserListSchema,
+  JiraUserSchema,
 } from "./types.js";

@@ -8,6 +8,8 @@ export const AtlassianConfigSchema = z.object({
   storyPointsField: z.string().min(1).optional(),
   // Default board for board-scoped sprint commands, so callers can omit the board id.
   jiraBoardId: z.number().int().positive().optional(),
+  // Default project for project-scoped commands, so callers can omit the project key.
+  jiraProject: z.string().min(1).optional(),
 });
 
 export type AtlassianConfig = z.infer<typeof AtlassianConfigSchema>;
@@ -240,6 +242,8 @@ export const JiraEditMetaFieldSchema = z.object({
   operations: z.array(z.string()).optional(),
   schema: JiraFieldSchemaSchema.optional(),
   allowedValues: z.array(z.unknown()).optional(),
+  // Create metadata reports whether Jira fills the field itself when it is left out.
+  hasDefaultValue: z.boolean().optional(),
 }).passthrough();
 
 export type JiraEditMetaField = z.infer<typeof JiraEditMetaFieldSchema>;
@@ -255,6 +259,11 @@ export interface JiraSettableField {
   readonly id: string;
   readonly name?: string;
   readonly type?: string;
+}
+
+/** A required create-screen field the payload does not set, with its options when it publishes any. */
+export interface JiraRequiredFieldGap extends JiraSettableField {
+  readonly allowedValues?: readonly string[];
 }
 
 /** One requested edit after its field was resolved and its value coerced to the API shape. */
@@ -307,4 +316,129 @@ export interface JiraIssueEditBatchResult {
   readonly updated: number;
   readonly failed: number;
   readonly results: readonly JiraIssueEditEntry[];
+}
+
+export const JiraCreateMetaIssueTypeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  subtask: z.boolean().optional(),
+}).passthrough();
+
+export type JiraCreateMetaIssueType = z.infer<typeof JiraCreateMetaIssueTypeSchema>;
+
+/**
+ * Atlassian's own spec keys this page `issueTypes` (and `createMetaIssueType` on the write side),
+ * while some responses key it `values`. Reading one key only yields a silently empty issue type
+ * list, so every accepted key is normalised onto `values`.
+ */
+export const JiraCreateMetaIssueTypePageSchema = z
+  .object({
+    startAt: z.number().optional(),
+    maxResults: z.number().optional(),
+    total: z.number().optional(),
+    values: z.array(JiraCreateMetaIssueTypeSchema).optional(),
+    issueTypes: z.array(JiraCreateMetaIssueTypeSchema).optional(),
+    createMetaIssueType: z.array(JiraCreateMetaIssueTypeSchema).optional(),
+  })
+  .passthrough()
+  .transform((page) => ({ ...page, values: page.values ?? page.issueTypes ?? page.createMetaIssueType ?? [] }));
+
+export type JiraCreateMetaIssueTypePage = z.infer<typeof JiraCreateMetaIssueTypePageSchema>;
+
+/** A create screen field. Same shape as an edit meta field, keyed by `fieldId` instead of a map key. */
+export const JiraCreateMetaFieldSchema = JiraEditMetaFieldSchema;
+
+/** Keyed `fields` in Atlassian's spec, `results` in its write schema, `values` in some responses. */
+export const JiraCreateMetaFieldPageSchema = z
+  .object({
+    startAt: z.number().optional(),
+    maxResults: z.number().optional(),
+    total: z.number().optional(),
+    values: z.array(JiraCreateMetaFieldSchema).optional(),
+    fields: z.array(JiraCreateMetaFieldSchema).optional(),
+    results: z.array(JiraCreateMetaFieldSchema).optional(),
+  })
+  .passthrough()
+  .transform((page) => ({ ...page, values: page.values ?? page.fields ?? page.results ?? [] }));
+
+export type JiraCreateMetaFieldPage = z.infer<typeof JiraCreateMetaFieldPageSchema>;
+
+export const JiraCreatedIssueSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  self: z.string().optional(),
+}).passthrough();
+
+export type JiraCreatedIssue = z.infer<typeof JiraCreatedIssueSchema>;
+
+export const JiraUserSchema = z.object({
+  accountId: z.string(),
+  displayName: z.string().optional(),
+  emailAddress: z.string().optional(),
+  active: z.boolean().optional(),
+  accountType: z.string().optional(),
+}).passthrough();
+
+export type JiraUser = z.infer<typeof JiraUserSchema>;
+
+export const JiraUserListSchema = z.array(JiraUserSchema);
+
+/** One issue to create. `summary`, `description`, and `parent` are shorthands for the same fields. */
+export interface JiraIssueCreateInput {
+  /** Project key or id; resolved against ATLASSIAN_JIRA_PROJECT when omitted. */
+  readonly project?: string;
+  /** Issue type display name or id, resolved against the project's create metadata. */
+  readonly issueType: string;
+  readonly summary?: string;
+  /** Markdown; converted to ADF because Jira's v3 API rejects a plain string here. */
+  readonly description?: string;
+  /** Parent issue key, for a sub-task or for placing an issue under an epic. */
+  readonly parent?: string;
+  /** Any other field, keyed by field id or display name, coerced against the create screen. */
+  readonly fields?: JiraFieldEdits;
+}
+
+export interface JiraIssueCreateOptions {
+  /** Resolve and validate the create payload without sending it. */
+  readonly dryRun?: boolean;
+}
+
+export interface JiraIssueCreateIssueType {
+  readonly id: string;
+  readonly name: string;
+  readonly subtask?: boolean;
+}
+
+export interface JiraIssueCreatePlan extends JiraIssueEditPlan {
+  readonly project: string;
+  readonly issueType: JiraIssueCreateIssueType;
+}
+
+export interface JiraIssueCreateResult extends JiraIssueCreatePlan {
+  readonly status: "created" | "dry_run";
+  readonly key?: string;
+  readonly id?: string;
+  /** Browse URL of the created issue, so the key can be handed straight to a human. */
+  readonly url?: string;
+}
+
+export interface JiraIssueCreateFailure {
+  readonly status: "error";
+  /** Position in the requested batch, so a failure maps back to its input record. */
+  readonly index: number;
+  readonly project?: string;
+  readonly issueType?: string;
+  readonly summary?: string;
+  readonly code: string;
+  readonly message: string;
+  readonly details?: unknown;
+}
+
+export type JiraIssueCreateEntry = (JiraIssueCreateResult & { readonly index: number }) | JiraIssueCreateFailure;
+
+export interface JiraIssueCreateBatchResult {
+  readonly created: number;
+  readonly failed: number;
+  readonly results: readonly JiraIssueCreateEntry[];
 }

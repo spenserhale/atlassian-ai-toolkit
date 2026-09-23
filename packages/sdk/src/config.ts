@@ -24,5 +24,6 @@ export function resolveConfig(overrides: Partial<AtlassianConfig> = {}): Atlassi
     apiToken: overrides.apiToken ?? process.env.ATLASSIAN_API_TOKEN ?? "",
     storyPointsField: overrides.storyPointsField ?? optional(process.env.ATLASSIAN_STORY_POINTS_FIELD),
     jiraBoardId: overrides.jiraBoardId ?? optionalNumber(process.env.ATLASSIAN_JIRA_BOARD_ID),
+    jiraProject: overrides.jiraProject ?? optional(process.env.ATLASSIAN_JIRA_PROJECT),
   });
 }
