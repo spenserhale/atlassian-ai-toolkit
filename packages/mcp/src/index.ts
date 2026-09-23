@@ -3,7 +3,7 @@ import { registerResourceTools } from "./tools/resources.js";
 
 const server = new FastMCP({
   name: "atlassian-ai-toolkit",
-  version: "0.6.0",
+  version: "0.7.0",
 });
 
 // Register tool groups
