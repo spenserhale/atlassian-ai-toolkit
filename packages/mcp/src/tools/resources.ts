@@ -414,6 +414,44 @@ export function registerResourceTools(server: FastMCP) {
   });
 
   server.addTool({
+    name: "jira_delete_sprint",
+    description:
+      "Preview or permanently delete a Jira sprint. Jira moves the sprint's open issues to the backlog. Deletion requires force true and confirm matching the sprint id.",
+    parameters: z.object({
+      sprintId: z.number().int().positive().describe("Jira sprint id"),
+      force: z.boolean().default(false).describe("Must be true to delete"),
+      confirm: z.string().optional().describe("Must match fetched sprint id when force is true"),
+    }),
+    execute: async (args) => {
+      const client = getClient();
+      const sprint = await client.getJiraSprint(args.sprintId);
+      const sprintLabel = { id: sprint.id, name: sprint.name, state: sprint.state };
+
+      if (!args.force) {
+        // Counted only for the preview, so the caller can see what Jira will move to the backlog.
+        const { issues } = await client.listJiraSprintIssues(sprint.id, { fields: ["status"] });
+        return JSON.stringify({
+          status: "dry_run",
+          wouldDelete: sprintLabel,
+          issueCount: issues.length,
+          hint: `Call again with force true and confirm "${sprint.id}" to permanently delete this Jira sprint. Its open issues move to the backlog.`,
+        }, null, 2);
+      }
+
+      if (args.confirm !== String(sprint.id)) {
+        return JSON.stringify({
+          status: "confirmation_required",
+          sprint: sprintLabel,
+          hint: `Call again with force true and confirm "${sprint.id}" to permanently delete this Jira sprint.`,
+        }, null, 2);
+      }
+
+      await client.deleteJiraSprint(sprint.id);
+      return JSON.stringify({ status: "deleted", sprint: sprintLabel }, null, 2);
+    },
+  });
+
+  server.addTool({
     name: "jira_rollover_sprint_issues",
     description: "Preview or move Jira issues from a source sprint to another sprint or the backlog. Requires force true and confirm matching the source sprint id.",
     parameters: z.object({

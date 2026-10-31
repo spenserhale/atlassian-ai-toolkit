@@ -62,6 +62,11 @@ interface CloseFlags extends PointsFlags {
   readonly "move-to-sprint"?: string;
 }
 
+interface DeleteFlags extends JsonFlag {
+  readonly confirm?: string;
+  readonly force: boolean;
+}
+
 interface RolloverFlags extends JsonFlag {
   readonly confirm?: string;
   readonly "dry-run": boolean;
@@ -513,6 +518,60 @@ const rolloverCommand = buildCommand({
   },
 });
 
+const deleteCommand = buildCommand({
+  docs: { brief: "Permanently delete a Jira sprint; previews unless --force is set" },
+  parameters: {
+    flags: {
+      confirm: { kind: "parsed", parse: String, brief: "Sprint ID required with --force", optional: true },
+      force: { kind: "boolean", brief: "Required to delete the sprint", default: false },
+      json: { kind: "boolean", brief: "Output as JSON", default: false },
+    },
+    positional: {
+      kind: "tuple",
+      parameters: [{ brief: "Sprint ID", parse: String }],
+    },
+  },
+  async func(this: void, flags: DeleteFlags, sprintId: string) {
+    try {
+      const client = getClient();
+      const sprint = await client.getJiraSprint(sprintId);
+      const sprintLabel = { id: sprint.id, name: sprint.name, state: sprint.state };
+
+      if (!flags.force) {
+        // Counted only for the preview, so the caller can see what Jira will move to the backlog.
+        const { issues } = await client.listJiraSprintIssues(sprint.id, { fields: ["status"] });
+        const preview = {
+          status: "dry_run",
+          wouldDelete: sprintLabel,
+          issueCount: issues.length,
+          hint: `Pass --force --confirm ${sprint.id} to permanently delete this Jira sprint. Its open issues move to the backlog.`,
+        };
+        printResult(
+          preview,
+          flags.json,
+          [`status: dry_run`, `would_delete: ${sprint.id} (${sprint.name}, ${sprint.state})`, `issue_count: ${issues.length}`, `hint: ${preview.hint}`].join("\n")
+        );
+        return;
+      }
+
+      if (flags.confirm !== String(sprint.id)) {
+        const result = {
+          status: "confirmation_required",
+          sprint: sprintLabel,
+          hint: `Re-run with --force --confirm ${sprint.id} to permanently delete this Jira sprint.`,
+        };
+        printResult(result, flags.json, `status: confirmation_required\nsprint: ${sprint.id}\nhint: ${result.hint}`);
+        process.exit(2);
+      }
+
+      await client.deleteJiraSprint(sprint.id);
+      printResult({ status: "deleted", sprint: sprintLabel }, flags.json, `status: deleted\n${formatSprint(sprint)}`);
+    } catch (err) {
+      handleError(err, flags.json);
+    }
+  },
+});
+
 export const jiraSprintRoutes = buildRouteMap({
   routes: {
     get: getCommand,
@@ -523,6 +582,7 @@ export const jiraSprintRoutes = buildRouteMap({
     edit: editCommand,
     close: closeCommand,
     rollover: rolloverCommand,
+    delete: deleteCommand,
   },
   docs: {
     brief: "Manage Jira sprints",

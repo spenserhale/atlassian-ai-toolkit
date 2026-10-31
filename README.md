@@ -241,6 +241,17 @@ atlassian confluence delete 123456 --force --confirm 123456
 atlassian confluence delete 123456 --purge --force --confirm 123456
 ```
 
+Sprint deletion is permanent and follows the same pattern. The preview reports how many issues the
+sprint holds; Jira moves its open issues to the backlog.
+
+```sh
+# Preview deleting a duplicate future sprint
+atlassian jira sprint delete 5168
+
+# Permanently delete the sprint
+atlassian jira sprint delete 5168 --force --confirm 5168
+```
+
 ## Getting Started From Source
 
 ```bash

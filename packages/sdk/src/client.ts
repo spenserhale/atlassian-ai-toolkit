@@ -742,6 +742,11 @@ export class AtlassianClient {
     return JiraSprintSchema.parse(data);
   }
 
+  /** Permanently deletes a sprint. Jira moves the sprint's open issues to the backlog. */
+  async deleteJiraSprint(sprintId: string | number): Promise<void> {
+    await this.request<void>("DELETE", `/rest/agile/1.0/sprint/${encodeURIComponent(String(sprintId))}`);
+  }
+
   /**
    * Moves issues into a sprint or the backlog, chunking into batches of at most
    * JIRA_SPRINT_ISSUE_MOVE_LIMIT since Jira's agile API rejects larger requests outright.

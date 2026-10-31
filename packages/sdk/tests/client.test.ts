@@ -430,6 +430,15 @@ describe("AtlassianClient", () => {
     });
   });
 
+  it("deletes a Jira sprint", async () => {
+    const calls = mockJsonFetch(undefined, 204);
+
+    await createClient().deleteJiraSprint(5168);
+
+    expect(calls[0]?.url).toBe("https://example.atlassian.net/rest/agile/1.0/sprint/5168");
+    expect(calls[0]?.init?.method).toBe("DELETE");
+  });
+
   it("moves Jira sprint issues to another sprint", async () => {
     const calls = mockJsonFetch(undefined, 204);
 
