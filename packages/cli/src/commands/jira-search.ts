@@ -1,5 +1,5 @@
 import { buildCommand } from "@stricli/core";
-import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
+import { AtlassianClient, loadConfig } from "@atlassian-ai-toolkit/sdk";
 import type { JiraIssue } from "@atlassian-ai-toolkit/sdk";
 
 interface SearchFlags {
@@ -47,7 +47,7 @@ export const jiraSearchCommand = buildCommand({
   async func(this: void, flags: SearchFlags) {
     try {
       if (flags.jql.trim().length === 0) throw new Error("--jql must be a non-empty JQL query");
-      const result = await new AtlassianClient(resolveConfig()).searchJiraIssues(flags.jql, {
+      const result = await new AtlassianClient(await loadConfig()).searchJiraIssues(flags.jql, {
         fields: parseFields(flags.fields),
         limit: parseLimit(flags.limit),
       });

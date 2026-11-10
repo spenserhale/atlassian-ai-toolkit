@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { buildCommand } from "@stricli/core";
-import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
+import { AtlassianClient, loadConfig } from "@atlassian-ai-toolkit/sdk";
 import type { JiraIssueCreateEntry, JiraIssueCreateInput } from "@atlassian-ai-toolkit/sdk";
 import { handleError } from "../errors.js";
 import { formatResolved, parseFieldFlags } from "../fields.js";
@@ -163,7 +163,7 @@ export const jiraCreateCommand = buildCommand({
     try {
       const fromFile = flags["from-file"];
       const opts = { dryRun: flags["dry-run"] };
-      const client = new AtlassianClient(resolveConfig());
+      const client = new AtlassianClient(await loadConfig());
 
       if (fromFile !== undefined) {
         const singleIssueFlags = [

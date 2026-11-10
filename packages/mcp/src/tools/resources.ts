@@ -2,7 +2,7 @@ import { basename } from "node:path";
 import { readFile } from "node:fs/promises";
 import type { FastMCP } from "fastmcp";
 import { z } from "zod";
-import { AtlassianClient, AtlassianNotFoundError, JIRA_SPRINT_ISSUE_MOVE_LIMIT, resolveConfig } from "@atlassian-ai-toolkit/sdk";
+import { AtlassianClient, AtlassianNotFoundError, JIRA_SPRINT_ISSUE_MOVE_LIMIT, loadConfig, loadCredentials, redactedConfig } from "@atlassian-ai-toolkit/sdk";
 import type {
   JiraAttachmentUpload,
   JiraIssueCreateInput,
@@ -13,8 +13,12 @@ import type {
   MoveJiraSprintIssuesInput,
 } from "@atlassian-ai-toolkit/sdk";
 
-function getClient(): AtlassianClient {
-  const config = resolveConfig();
+/**
+ * Config is loaded per tool call, so a credential rotated in the OS keychain applies without
+ * restarting the MCP host. There is deliberately no tool that writes or deletes keychain entries.
+ */
+async function getClient(): Promise<AtlassianClient> {
+  const config = await loadConfig();
   return new AtlassianClient(config);
 }
 
@@ -82,13 +86,21 @@ function moveFailureResult(sprintLabel: Record<string, unknown>, moveResult: Jir
 
 export function registerResourceTools(server: FastMCP) {
   server.addTool({
+    name: "atlassian_config_status",
+    description:
+      "Report whether Atlassian credentials are configured and where each comes from (env, .env file, or OS keychain). Never returns credential values.",
+    parameters: z.object({}),
+    execute: async () => JSON.stringify(redactedConfig(await loadCredentials()), null, 2),
+  });
+
+  server.addTool({
     name: "jira_get_issue",
     description: "Get one Jira issue by key or id.",
     parameters: z.object({
       issueIdOrKey: z.string().describe("Jira issue key or id"),
     }),
     execute: async (args) => {
-      const issue = await getClient().getJiraIssue(args.issueIdOrKey);
+      const issue = await (await getClient()).getJiraIssue(args.issueIdOrKey);
       return JSON.stringify(issue, null, 2);
     },
   });
@@ -103,7 +115,7 @@ export function registerResourceTools(server: FastMCP) {
       confirm: z.string().optional().describe("Must match fetched issue key or id when force is true"),
     }),
     execute: async (args) => {
-      const client = getClient();
+      const client = await getClient();
       const issue = await client.getJiraIssue(args.issueIdOrKey);
 
       if (!args.force) {
@@ -138,7 +150,7 @@ export function registerResourceTools(server: FastMCP) {
       fields: z.array(z.string()).optional().describe("Issue fields to return; defaults to *navigable"),
     }),
     execute: async (args) => {
-      const result = await getClient().searchJiraIssues(args.jql, {
+      const result = await (await getClient()).searchJiraIssues(args.jql, {
         limit: args.limit,
         fields: args.fields,
       });
@@ -166,7 +178,7 @@ export function registerResourceTools(server: FastMCP) {
       notifyUsers: z.boolean().default(false).describe("Notify watchers of the edit"),
     }),
     execute: async (args) => {
-      const client = getClient();
+      const client = await getClient();
       const opts = { dryRun: args.dryRun, notifyUsers: args.notifyUsers };
 
       if (args.edits !== undefined && args.edits.length > 0) {
@@ -212,7 +224,7 @@ export function registerResourceTools(server: FastMCP) {
       dryRun: z.boolean().default(false).describe("Resolve and validate the payload without creating anything"),
     }),
     execute: async (args) => {
-      const client = getClient();
+      const client = await getClient();
       const opts = { dryRun: args.dryRun };
 
       if (args.issues !== undefined && args.issues.length > 0) {
@@ -255,7 +267,7 @@ export function registerResourceTools(server: FastMCP) {
       pointsField: z.string().optional().describe("Story point field id; defaults to ATLASSIAN_STORY_POINTS_FIELD or customfield_10105"),
     }),
     execute: async (args) => {
-      const client = getClient();
+      const client = await getClient();
       const sprint = await client.getJiraSprint(args.sprintId);
       const points = await rollupPoints(client, sprint.id, args);
       return JSON.stringify(points === undefined ? sprint : { ...sprint, points }, null, 2);
@@ -272,7 +284,7 @@ export function registerResourceTools(server: FastMCP) {
       pointsField: z.string().optional().describe("Story point field id; defaults to ATLASSIAN_STORY_POINTS_FIELD or customfield_10105"),
     }),
     execute: async (args) => {
-      const client = getClient();
+      const client = await getClient();
       const sprint = await client.getCurrentJiraSprint(args.boardId);
       const points = await rollupPoints(client, sprint.id, args);
       return JSON.stringify(points === undefined ? sprint : { ...sprint, points }, null, 2);
@@ -287,7 +299,7 @@ export function registerResourceTools(server: FastMCP) {
       state: sprintStateSchema.optional().describe("Optional sprint state filter"),
     }),
     execute: async (args) => {
-      const sprints = await getClient().listJiraSprints(args.boardId, {
+      const sprints = await (await getClient()).listJiraSprints(args.boardId, {
         state: args.state,
       });
       return JSON.stringify(sprints, null, 2);
@@ -303,7 +315,7 @@ export function registerResourceTools(server: FastMCP) {
       fields: z.array(z.string()).optional().describe("Issue fields to return; defaults to every navigable field, which is large for a full sprint"),
     }),
     execute: async (args) => {
-      const result = await getClient().listJiraSprintIssues(args.sprintId, { fields: args.fields });
+      const result = await (await getClient()).listJiraSprintIssues(args.sprintId, { fields: args.fields });
       return JSON.stringify(result, null, 2);
     },
   });
@@ -319,7 +331,7 @@ export function registerResourceTools(server: FastMCP) {
       endDate: z.string().optional().describe("Sprint end date as accepted by Jira"),
     }),
     execute: async (args) => {
-      const sprint = await getClient().createJiraSprint(args);
+      const sprint = await (await getClient()).createJiraSprint(args);
       return JSON.stringify({ status: "created", sprint }, null, 2);
     },
   });
@@ -345,7 +357,7 @@ export function registerResourceTools(server: FastMCP) {
       };
       if (Object.values(input).every((value) => value === undefined)) throw new Error("Provide at least one field to edit");
 
-      const sprint = await getClient().updateJiraSprint(args.sprintId, input);
+      const sprint = await (await getClient()).updateJiraSprint(args.sprintId, input);
       return JSON.stringify({ status: "updated", sprint }, null, 2);
     },
   });
@@ -364,7 +376,7 @@ export function registerResourceTools(server: FastMCP) {
       confirm: z.string().optional().describe("Must match fetched sprint id when force is true"),
     }),
     execute: async (args) => {
-      const client = getClient();
+      const client = await getClient();
       const moveInput = buildMoveInput(args);
       await validateRolloverTarget(client, moveInput);
       const sprint = await client.getJiraSprint(args.sprintId);
@@ -423,7 +435,7 @@ export function registerResourceTools(server: FastMCP) {
       confirm: z.string().optional().describe("Must match fetched sprint id when force is true"),
     }),
     execute: async (args) => {
-      const client = getClient();
+      const client = await getClient();
       const sprint = await client.getJiraSprint(args.sprintId);
       const sprintLabel = { id: sprint.id, name: sprint.name, state: sprint.state };
 
@@ -463,7 +475,7 @@ export function registerResourceTools(server: FastMCP) {
       confirm: z.string().optional().describe("Must match fetched source sprint id when force is true"),
     }),
     execute: async (args) => {
-      const client = getClient();
+      const client = await getClient();
       const moveInput = buildMoveInput(args);
       if (!moveInput) throw new Error("Provide one rollover target: moveToSprintId or moveToBacklog");
       await validateRolloverTarget(client, moveInput);
@@ -541,7 +553,7 @@ export function registerResourceTools(server: FastMCP) {
         }, null, 2);
       }
 
-      const attachments = await getClient().addJiraAttachments(args.issueIdOrKey, uploads);
+      const attachments = await (await getClient()).addJiraAttachments(args.issueIdOrKey, uploads);
       return JSON.stringify({
         status: "uploaded",
         issue: args.issueIdOrKey,
@@ -557,7 +569,7 @@ export function registerResourceTools(server: FastMCP) {
       pageId: z.string().describe("Confluence page id"),
     }),
     execute: async (args) => {
-      const page = await getClient().getConfluencePage(args.pageId);
+      const page = await (await getClient()).getConfluencePage(args.pageId);
       return JSON.stringify(page, null, 2);
     },
   });
@@ -583,7 +595,7 @@ export function registerResourceTools(server: FastMCP) {
       const bytes = await file.bytes().catch(() => null);
       if (bytes === null) throw new Error(`filePath does not exist or is not readable: ${filePath}`);
 
-      const result = await getClient().uploadConfluenceAttachment(pageId, {
+      const result = await (await getClient()).uploadConfluenceAttachment(pageId, {
         file: new Blob([bytes], { type: args.mediaType ?? file.type }),
         filename,
         comment: args.comment,
@@ -609,7 +621,7 @@ export function registerResourceTools(server: FastMCP) {
       confirm: z.string().optional().describe("Must match fetched page id when force is true"),
     }),
     execute: async (args) => {
-      const client = getClient();
+      const client = await getClient();
       const page = await client.getConfluencePage(args.pageId);
 
       if (!args.force) {

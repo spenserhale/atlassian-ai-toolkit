@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { readFile } from "node:fs/promises";
 import { buildCommand } from "@stricli/core";
-import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
+import { AtlassianClient, loadConfig } from "@atlassian-ai-toolkit/sdk";
 import type { JiraAttachmentUpload } from "@atlassian-ai-toolkit/sdk";
 
 interface AttachFlags {
@@ -41,7 +41,7 @@ export const jiraAttachCommand = buildCommand({
         }))
       );
 
-      const client = new AtlassianClient(resolveConfig());
+      const client = new AtlassianClient(await loadConfig());
       const attachments = await client.addJiraAttachments(issueIdOrKey, uploads);
 
       if (flags.json) {

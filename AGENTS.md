@@ -20,7 +20,7 @@ bun run dev:cli -- --help
 bun run dev:mcp
 ```
 
-Config: copy `.env.example` to `.env` and set `ATLASSIAN_SITE_URL`, `ATLASSIAN_EMAIL`, and `ATLASSIAN_API_TOKEN`.
+Config: store `ATLASSIAN_SITE_URL`, `ATLASSIAN_EMAIL`, and `ATLASSIAN_API_TOKEN` in the OS keychain with `bun run dev:cli -- auth set atlassian`, or copy `.env.example` to `.env`. Precedence is process env > nearest `.env` > keychain; `ATLASSIAN_KEYCHAIN=0` skips the keychain. See `docs/guides/configuration.md`.
 
 ## Repo Layout
 
@@ -28,6 +28,9 @@ Config: copy `.env.example` to `.env` and set `ATLASSIAN_SITE_URL`, `ATLASSIAN_E
 packages/sdk/        Zod types, HTTP client, config resolver, typed errors
 packages/cli/        Stricli CLI; thin consumer of the SDK
 packages/mcp/        FastMCP stdio server; thin consumer of the SDK
+docs/guides/         Configuration and security guides
+docs/decisions/      Decision records
+docs/add/            Feature specs and plans
 refs/                Ignored reference repos and downloaded examples
 ```
 
@@ -43,6 +46,12 @@ Destructive operations require explicit safeguards:
 - Jira sprint deletion is permanent. CLI commands must preview by default and require `--force --confirm <sprint-id>` for actual deletion.
 - Confluence page deletion moves to trash by default. Permanent purge must be a separate explicit option and require `--force --confirm <page-id>`.
 - MCP destructive tools must preview by default and require `force: true` plus a matching `confirm` field before calling the SDK delete method.
+
+## Credentials
+
+- CLI commands and MCP tools load config with `await loadConfig()`, never `resolveConfig()`, so the OS keychain is consulted.
+- Never accept a credential as an argument or flag value. Never add an MCP tool that writes or deletes secrets.
+- Tests must never touch the real keychain: inject an in-memory `SecretStore`, and set `ATLASSIAN_KEYCHAIN=0` in the env of every spawned CLI or MCP process.
 
 ## Done Criteria
 

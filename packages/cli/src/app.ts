@@ -9,6 +9,8 @@ import { jiraEditCommand } from "./commands/jira-edit.js";
 import { jiraGetCommand } from "./commands/jira-get.js";
 import { jiraSearchCommand } from "./commands/jira-search.js";
 import { jiraSprintRoutes } from "./commands/jira-sprint.js";
+import { authRoutes } from "./commands/auth/index.js";
+import { configRoutes } from "./commands/config-show.js";
 import { upgradeCommand } from "./commands/upgrade.js";
 import { CLI_VERSION } from "./version.js";
 
@@ -42,6 +44,8 @@ const routes = buildRouteMap({
   routes: {
     jira: jiraRoutes,
     confluence: confluenceRoutes,
+    auth: authRoutes,
+    config: configRoutes,
     upgrade: upgradeCommand,
   },
   docs: {

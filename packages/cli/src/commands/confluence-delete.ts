@@ -1,5 +1,5 @@
 import { buildCommand } from "@stricli/core";
-import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
+import { AtlassianClient, loadConfig } from "@atlassian-ai-toolkit/sdk";
 
 interface DeleteFlags {
   readonly confirm?: string;
@@ -49,7 +49,7 @@ export const confluenceDeleteCommand = buildCommand({
   },
   async func(this: void, flags: DeleteFlags, pageId: string) {
     try {
-      const client = new AtlassianClient(resolveConfig());
+      const client = new AtlassianClient(await loadConfig());
       const page = await client.getConfluencePage(pageId);
 
       if (flags["dry-run"] || !flags.force) {

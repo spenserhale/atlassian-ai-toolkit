@@ -1,6 +1,28 @@
 export { AtlassianClient, JIRA_SPRINT_ISSUE_MOVE_LIMIT } from "./client.js";
 export type { JiraAttachmentUpload } from "./client.js";
-export { resolveConfig } from "./config.js";
+export { loadConfig, loadCredentials, redactedConfig, resolveConfig, resolveCredentials } from "./config.js";
+export type {
+  CredentialResolution,
+  Env,
+  KeychainState,
+  LoadConfigOptions,
+  RedactedConfig,
+  ResolveConfigOptions,
+  ResolvedConfig,
+} from "./config.js";
+export {
+  bunSecretStore,
+  CREDENTIAL_KEYS,
+  CREDENTIAL_RESOURCES,
+  KEYCHAIN_SERVICE,
+  KEYCHAIN_SWITCH,
+  keychainErrorReason,
+  readKeychainValues,
+  resourceCredentialKeys,
+  resourceForCredentialKey,
+  SECRET_CREDENTIAL_KEYS,
+} from "./secrets.js";
+export type { CredentialResource, KeychainReadResult, KeychainStatus, SecretStore } from "./secrets.js";
 export { isAdfDocument, markdownToAdf } from "./adf.js";
 export type { AdfDocument, AdfNode } from "./adf.js";
 export { guessContentType } from "./content-type.js";
@@ -15,6 +37,7 @@ export {
 } from "./jira-fields.js";
 export {
   AtlassianAuthError,
+  AtlassianConfigError,
   AtlassianError,
   AtlassianFieldError,
   AtlassianNotFoundError,

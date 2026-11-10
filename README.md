@@ -56,7 +56,30 @@ Then `jira get PROJ-123` runs `atlassian jira get PROJ-123`, and `conf get 12345
 
 ## Configure
 
-Set Atlassian Cloud credentials in your shell:
+The toolkit needs `ATLASSIAN_SITE_URL`, `ATLASSIAN_EMAIL`, and `ATLASSIAN_API_TOKEN`. Create a scoped API token at <https://id.atlassian.com/manage-profile/security/api-tokens>.
+
+### Recommended: OS keychain
+
+Store them once in the OS credential store (macOS Keychain, Linux libsecret, Windows Credential Manager). The CLI and the MCP server both find them, with no `.env` file and no MCP `env` block:
+
+```sh
+atlassian auth set atlassian       # prompts; the API token is hidden as you type
+atlassian auth list                # keychain state and active source, never values
+atlassian config show              # redacted config and keychain status
+```
+
+Non-interactive (scripts, agents) pipe one value per call:
+
+```sh
+pbpaste | atlassian auth set atlassian --key ATLASSIAN_API_TOKEN --stdin
+op read 'op://Private/Atlassian/credential' | atlassian auth set atlassian --key ATLASSIAN_API_TOKEN --stdin
+```
+
+Already have a `.env`? `atlassian auth migrate --dry-run` shows what it would copy into the keychain; `atlassian auth migrate` copies it and lists the files to clean up. `atlassian auth delete atlassian --yes` removes the entries.
+
+### Environment variables
+
+Env vars still work and take precedence over the keychain:
 
 ```sh
 export ATLASSIAN_SITE_URL="https://your-site.atlassian.net"
@@ -64,7 +87,7 @@ export ATLASSIAN_EMAIL="you@example.com"
 export ATLASSIAN_API_TOKEN="your-api-token"
 ```
 
-Create a scoped API token at <https://id.atlassian.com/manage-profile/security/api-tokens>.
+Precedence is process env > nearest `.env` > OS keychain. Set `ATLASSIAN_KEYCHAIN=0` to skip the keychain. See the [configuration guide](./docs/guides/configuration.md) for the commands, caveats (macOS access prompts, Linux needing a Secret Service daemon), and MCP setup, and the [security guide](./docs/guides/security.md).
 
 ## Creating Issues
 
@@ -269,6 +292,18 @@ bun run dev:mcp
 ```
 
 The token should be scoped to the smallest set of Jira and Confluence permissions needed for the workflow. Third-party reference implementations live under `refs/`, which is intentionally gitignored so this repo never vendors or executes unreviewed code with local credentials.
+
+## SDK Configuration
+
+Use `loadConfig()` to resolve credentials the same way the CLI and MCP server do, including the OS keychain when running on Bun. `resolveConfig()` stays synchronous and skips the keychain.
+
+```ts
+import { AtlassianClient, loadConfig } from "@atlassian-ai-toolkit/sdk";
+
+const client = new AtlassianClient(await loadConfig());
+// Tests or headless code: skip the keychain, or inject your own SecretStore.
+const fromEnvOnly = await loadConfig({ secretStore: null });
+```
 
 ## Architecture
 

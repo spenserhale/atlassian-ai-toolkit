@@ -1,5 +1,5 @@
 import { buildCommand } from "@stricli/core";
-import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
+import { AtlassianClient, loadConfig } from "@atlassian-ai-toolkit/sdk";
 
 interface GetFlags {
   readonly json: boolean;
@@ -24,7 +24,7 @@ export const confluenceGetCommand = buildCommand({
   },
   async func(this: void, flags: GetFlags, pageId: string) {
     try {
-      const client = new AtlassianClient(resolveConfig());
+      const client = new AtlassianClient(await loadConfig());
       const page = await client.getConfluencePage(pageId);
 
       if (flags.json) {

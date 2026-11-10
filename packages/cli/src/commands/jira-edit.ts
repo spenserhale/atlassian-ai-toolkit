@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { buildCommand } from "@stricli/core";
-import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
+import { AtlassianClient, loadConfig } from "@atlassian-ai-toolkit/sdk";
 import type { JiraIssueEditEntry, JiraIssueFieldEdits } from "@atlassian-ai-toolkit/sdk";
 import { handleError } from "../errors.js";
 import { formatResolved, parseFieldFlags } from "../fields.js";
@@ -81,7 +81,7 @@ export const jiraEditCommand = buildCommand({
     try {
       const fromFile = flags["from-file"];
       const opts = { dryRun: flags["dry-run"], notifyUsers: flags.notify };
-      const client = new AtlassianClient(resolveConfig());
+      const client = new AtlassianClient(await loadConfig());
 
       if (fromFile !== undefined) {
         if (issueIdOrKey !== undefined) throw new Error("Pass either an issue key or --from-file, not both");

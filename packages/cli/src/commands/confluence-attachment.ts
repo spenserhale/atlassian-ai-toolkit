@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { buildCommand, buildRouteMap } from "@stricli/core";
-import { AtlassianClient, resolveConfig } from "@atlassian-ai-toolkit/sdk";
+import { AtlassianClient, loadConfig } from "@atlassian-ai-toolkit/sdk";
 
 interface UploadFlags {
   readonly comment?: string;
@@ -97,7 +97,7 @@ export const uploadCommand = buildCommand({
       }
 
       const uploadFile = new Blob([bytes], { type: flags["media-type"] ?? file.type });
-      const client = new AtlassianClient(resolveConfig());
+      const client = new AtlassianClient(await loadConfig());
       const result = await client.uploadConfluenceAttachment(pageId, {
         file: uploadFile,
         filename,

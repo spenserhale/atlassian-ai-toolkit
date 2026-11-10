@@ -6,7 +6,7 @@ import {
   AtlassianNotFoundError,
   AtlassianRateLimitError,
   JIRA_SPRINT_ISSUE_MOVE_LIMIT,
-  resolveConfig,
+  loadConfig,
 } from "@atlassian-ai-toolkit/sdk";
 import type {
   JiraIssue,
@@ -76,8 +76,8 @@ interface RolloverFlags extends JsonFlag {
   readonly "move-to-sprint"?: string;
 }
 
-function getClient(): AtlassianClient {
-  return new AtlassianClient(resolveConfig());
+async function getClient(): Promise<AtlassianClient> {
+  return new AtlassianClient(await loadConfig());
 }
 
 function parseNumber(value: string, label: string): number {
@@ -223,7 +223,7 @@ const getCommand = buildCommand({
   },
   async func(this: void, flags: PointsFlags, sprintId: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const sprint = await client.getJiraSprint(sprintId);
       const points = await rollupPoints(client, sprint.id, flags);
       printResult(
@@ -252,7 +252,7 @@ const currentCommand = buildCommand({
   },
   async func(this: void, flags: PointsFlags, boardId: string | undefined) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const sprint = await client.getCurrentJiraSprint(boardId === undefined ? undefined : parseNumber(boardId, "board-id"));
       const points = await rollupPoints(client, sprint.id, flags);
       printResult(
@@ -277,7 +277,7 @@ const listCommand = buildCommand({
   },
   async func(this: void, flags: ListFlags) {
     try {
-      const result = await getClient().listJiraSprints(flags.board === undefined ? undefined : parseNumber(flags.board, "--board"), {
+      const result = await (await getClient()).listJiraSprints(flags.board === undefined ? undefined : parseNumber(flags.board, "--board"), {
         state: parseState(flags.state),
       });
       const text = [`sprints[${result.values.length}]:`, ...result.values.map((sprint) => `- ${sprint.id}: ${sprint.name} (${sprint.state})`)].join("\n");
@@ -302,7 +302,7 @@ const issuesCommand = buildCommand({
   },
   async func(this: void, flags: IssuesFlags, sprintId: string) {
     try {
-      const result = await getClient().listJiraSprintIssues(sprintId, { fields: parseFields(flags.fields) });
+      const result = await (await getClient()).listJiraSprintIssues(sprintId, { fields: parseFields(flags.fields) });
       const text = [`issues[${result.issues.length}]:`, ...result.issues.map(formatIssue)].join("\n");
       printResult(result, flags.json, text);
     } catch (err) {
@@ -325,7 +325,7 @@ const createCommand = buildCommand({
   },
   async func(this: void, flags: CreateFlags) {
     try {
-      const sprint = await getClient().createJiraSprint({
+      const sprint = await (await getClient()).createJiraSprint({
         originBoardId: flags.board === undefined ? undefined : parseNumber(flags.board, "--board"),
         name: flags.name,
         goal: flags.goal,
@@ -366,7 +366,7 @@ const editCommand = buildCommand({
       };
       if (Object.values(input).every((value) => value === undefined)) throw new Error("Provide at least one field to edit");
 
-      const sprint = await getClient().updateJiraSprint(sprintId, input);
+      const sprint = await (await getClient()).updateJiraSprint(sprintId, input);
       printResult({ status: "updated", sprint }, flags.json, `status: updated\n${formatSprint(sprint)}`);
     } catch (err) {
       handleError(err, flags.json);
@@ -395,7 +395,7 @@ const closeCommand = buildCommand({
   },
   async func(this: void, flags: CloseFlags, sprintId: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const moveInput = buildMoveInput(flags);
       await validateRolloverTarget(client, moveInput);
       const sprint = await client.getJiraSprint(sprintId);
@@ -471,7 +471,7 @@ const rolloverCommand = buildCommand({
   },
   async func(this: void, flags: RolloverFlags, sprintId: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const moveInput = buildMoveInput(flags);
       if (!moveInput) throw new Error("Provide one rollover target: --move-to-sprint or --move-to-backlog");
       await validateRolloverTarget(client, moveInput);
@@ -533,7 +533,7 @@ const deleteCommand = buildCommand({
   },
   async func(this: void, flags: DeleteFlags, sprintId: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const sprint = await client.getJiraSprint(sprintId);
       const sprintLabel = { id: sprint.id, name: sprint.name, state: sprint.state };
 

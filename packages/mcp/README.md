@@ -6,6 +6,7 @@ MCP server for Atlassian Cloud, built with [FastMCP](https://github.com/punkpeye
 
 | Tool | Description |
 |------|-------------|
+| `atlassian_config_status` | Report whether credentials are configured and where each comes from (env, `.env`, or OS keychain); never returns values |
 | `jira_get_issue` | Get a Jira issue by key or ID |
 | `jira_search_issues` | Search issues with JQL (auto-paginated), optional `limit` and `fields`; returns `total` / `isLast` / `startAt` |
 | `jira_create_issue` | Create one issue or a batch, resolved against the project's create screen; markdown description, `dryRun` |
@@ -26,6 +27,8 @@ MCP server for Atlassian Cloud, built with [FastMCP](https://github.com/punkpeye
 
 ## Setup with Claude Desktop
 
+Store credentials in the OS keychain once with the CLI (`atlassian auth set atlassian`). The server reads them on every tool call, so the host config needs no `env` block and a rotated token applies without a restart.
+
 Add this to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
@@ -33,7 +36,22 @@ Add this to your Claude Desktop config (`~/Library/Application Support/Claude/cl
   "mcpServers": {
     "atlassian-ai-toolkit": {
       "command": "bun",
-      "args": ["run", "/Users/spenser/Code/Toolkits/atlassian-ai-toolkit/packages/mcp/src/index.ts"],
+      "args": ["run", "/abs/path/atlassian-ai-toolkit/packages/mcp/src/index.ts"]
+    }
+  }
+}
+```
+
+On macOS the first launch from a GUI host may show a keychain access dialog; choose **Always Allow**. The server has no tool that writes or deletes keychain entries.
+
+Where the keychain is unavailable (Linux without a Secret Service daemon, CI), pass credentials through an `env` block instead:
+
+```json
+{
+  "mcpServers": {
+    "atlassian-ai-toolkit": {
+      "command": "bun",
+      "args": ["run", "/abs/path/atlassian-ai-toolkit/packages/mcp/src/index.ts"],
       "env": {
         "ATLASSIAN_SITE_URL": "https://your-site.atlassian.net",
         "ATLASSIAN_EMAIL": "you@example.com",
@@ -43,6 +61,8 @@ Add this to your Claude Desktop config (`~/Library/Application Support/Claude/cl
   }
 }
 ```
+
+See the [configuration guide](../../docs/guides/configuration.md) for precedence and caveats.
 
 ## Development
 

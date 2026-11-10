@@ -44,3 +44,18 @@ export class AtlassianFieldError extends AtlassianError {
     this.name = "AtlassianFieldError";
   }
 }
+
+/**
+ * Configuration the toolkit cannot work with, such as an unreachable OS keychain. `hint` says how to
+ * fix it; the CLI maps this error to exit code 3.
+ */
+export class AtlassianConfigError extends AtlassianError {
+  constructor(
+    message: string,
+    public readonly hint?: string,
+    public readonly reason?: string
+  ) {
+    super(message, "CONFIG_ERROR", undefined, reason === undefined ? undefined : { reason });
+    this.name = "AtlassianConfigError";
+  }
+}
