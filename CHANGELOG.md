@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-09
+
 ### Added
 
 - OS keychain credential storage via `Bun.secrets` (macOS Keychain, Linux libsecret, Windows Credential Manager) under service `atlassian-ai-toolkit`, one entry per env var (`ATLASSIAN_SITE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`). Precedence is process env > nearest `.env` > keychain. The keychain is only read for credentials no other source supplied, and `ATLASSIAN_KEYCHAIN=0` turns the lookup off.
