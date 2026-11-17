@@ -153,7 +153,10 @@ function collectListItems(lines: readonly string[], from: number, ordered: boole
       let lookahead = index + 1;
       while (lookahead < lines.length && (lines[lookahead] ?? "").trim().length === 0) lookahead += 1;
       const nextLine = lines[lookahead] ?? "";
-      const continues = lookahead < lines.length && (indentOf(nextLine) > base || (marker.exec(nextLine)?.[1] ?? "").length === base);
+      // Only a real marker at this indent continues the list; a plain line at the same indent is a new paragraph.
+      const nextMarker = marker.exec(nextLine);
+      const continues =
+        lookahead < lines.length && (indentOf(nextLine) > base || (nextMarker !== null && (nextMarker[1] ?? "").length === base));
       if (!continues) break;
       items[items.length - 1]?.push("");
       index = lookahead;

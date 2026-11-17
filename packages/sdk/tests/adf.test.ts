@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { isAdfDocument, markdownToAdf } from "../src/adf.js";
+import { type AdfNode, isAdfDocument, markdownToAdf } from "../src/adf.js";
 
 describe("markdownToAdf", () => {
   it("converts paragraphs, keeping a single newline as a hard break", () => {
@@ -98,6 +98,36 @@ describe("markdownToAdf", () => {
       type: "listItem",
       content: [{ type: "paragraph", content: [] }],
     });
+  });
+
+  it("ends a list at a blank line followed by an unindented paragraph", () => {
+    const types = (markdown: string) => markdownToAdf(markdown).content.map((node) => node.type);
+
+    expect(types("- one\n- two\n\nAfter the list")).toEqual(["bulletList", "paragraph"]);
+    expect(types("1. one\n2. two\n\nAfter the list")).toEqual(["orderedList", "paragraph"]);
+    expect(types("- one\n\n**Label:**\n\nMore text\n\n## Heading")).toEqual(["bulletList", "paragraph", "paragraph", "heading"]);
+    expect(markdownToAdf("- one\n\nAfter").content[0]).toEqual({
+      type: "bulletList",
+      content: [{ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "one" }] }] }],
+    });
+  });
+
+  it("ends a nested list at a blank line followed by a paragraph at the parent item's indent", () => {
+    const doc = markdownToAdf("- parent\n  - child\n\n  Parent continues\n\nOutside");
+    const item = (doc.content[0] as { content: Array<{ content: AdfNode[] }> }).content[0];
+
+    expect(doc.content.map((node) => node.type)).toEqual(["bulletList", "paragraph"]);
+    expect(item?.content.map((node) => node.type)).toEqual(["paragraph", "bulletList", "paragraph"]);
+  });
+
+  it("still continues a list across blank lines between items and into indented item content", () => {
+    const types = (markdown: string) => markdownToAdf(markdown).content.map((node) => node.type);
+
+    expect(types("- one\n\n- two")).toEqual(["bulletList"]);
+    expect((markdownToAdf("- one\n\n- two").content[0] as { content: unknown[] }).content).toHaveLength(2);
+    expect(types("- one\n\n  more of one")).toEqual(["bulletList"]);
+    expect(types("- one\n\n# Heading")).toEqual(["bulletList", "heading"]);
+    expect(types("- one\n\n1. first")).toEqual(["bulletList", "orderedList"]);
   });
 
   it("gives an empty blockquote a paragraph for the same reason", () => {
