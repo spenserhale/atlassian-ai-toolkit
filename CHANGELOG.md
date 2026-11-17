@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-17
+
+### Fixed
+
+- `markdownToAdf` no longer nests a paragraph that follows a list, after a blank line, inside the list's last item. Later paragraphs, including bold label lines, were swallowed the same way until a heading, rule, code fence, quote, or different list type. This affected every rich-text field written from markdown: `jira create`/`jira edit` (including `--from-file`) and the `jira_create_issue`/`jira_edit_issue` MCP tools.
+
 ## [0.9.0] - 2026-11-09
 
 ### Added
