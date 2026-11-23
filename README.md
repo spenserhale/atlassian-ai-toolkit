@@ -213,8 +213,8 @@ asks for the id.
 `--field` uses the same `<id|name>=<value>` resolution and value coercion as `jira edit`, but against
 the transition screen: only fields on that screen can be set during the move. A field that is not on
 the screen fails with `field_not_settable` and the screen's fields in the error details. To set it,
-run `jira edit` first and then transition. A transition is reversible through the workflow, so no
-`--force --confirm` gate applies.
+run `jira edit` first and then transition. No `--force --confirm` gate applies. Moving back depends on
+the workflow and may need a separate transition, so run `--dry-run` first on an unfamiliar one.
 
 ## Searching And Sprint Reporting
 
