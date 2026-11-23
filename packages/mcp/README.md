@@ -11,6 +11,8 @@ MCP server for Atlassian Cloud, built with [FastMCP](https://github.com/punkpeye
 | `jira_search_issues` | Search issues with JQL (auto-paginated), optional `limit` and `fields`; returns `total` / `isLast` / `startAt` |
 | `jira_create_issue` | Create one issue or a batch, resolved against the project's create screen; markdown description, `dryRun` |
 | `jira_edit_issue` | Set fields on one issue or a batch, coerced from the issue's edit metadata; supports `dryRun` |
+| `jira_list_transitions` | List the transitions available from an issue's current status, with target status and screen fields |
+| `jira_transition_issue` | Move an issue by transition id, name, or target status; fills transition screen `fields`, supports `dryRun` |
 | `jira_delete_issue` | Preview or delete a Jira issue with `force` + `confirm` |
 | `jira_get_sprint` | Get a Jira sprint by ID, with an optional story point rollup (`includePoints`) |
 | `jira_list_sprints` | List sprints for a board, optionally filtered by state |

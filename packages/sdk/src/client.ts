@@ -16,6 +16,7 @@ import {
   JiraSprintIssuePageSchema,
   JiraSprintListSchema,
   JiraSprintSchema,
+  JiraTransitionListSchema,
 } from "./types.js";
 import type {
   AtlassianConfig,
@@ -40,6 +41,9 @@ import type {
   JiraIssueEditOptions,
   JiraIssueEditResult,
   JiraIssueFieldEdits,
+  JiraIssueTransitionInput,
+  JiraIssueTransitionOptions,
+  JiraIssueTransitionResult,
   JiraSearchOptions,
   JiraSearchResult,
   JiraSprint,
@@ -50,11 +54,14 @@ import type {
   JiraSprintListOptions,
   JiraSprintPoints,
   JiraSprintPointsOptions,
+  JiraTransition,
+  JiraTransitionSummary,
   MoveJiraSprintIssuesInput,
   UpdateJiraSprintInput,
 } from "./types.js";
 import { guessContentType } from "./content-type.js";
 import { isJiraUserField, listMissingRequiredJiraFields, planJiraIssueFieldEdits, resolveJiraField } from "./jira-fields.js";
+import { jiraTransitionScreen, resolveJiraTransition, summarizeJiraTransition } from "./jira-transitions.js";
 import {
   AtlassianAuthError,
   AtlassianError,
@@ -134,25 +141,25 @@ function jiraFieldErrors(err: unknown): Record<string, string> | undefined {
  * missing required field, and a bad value with the same status, so the field error map is the only
  * thing that separates them.
  */
-function translateCreateError(err: unknown): unknown {
+function translateCreateError(err: unknown, action: "create" | "transition" = "create"): unknown {
   const errors = jiraFieldErrors(err);
-  if (errors === undefined) return err;
+  if (errors === undefined || Object.keys(errors).length === 0) return err;
 
   const parent = errors.parent;
-  if (parent !== undefined) return new AtlassianFieldError(parent, "invalid_parent", { errors });
+  if (action === "create" && parent !== undefined) return new AtlassianFieldError(parent, "invalid_parent", { errors });
 
   // Jira words this as "Field 'x' is required" on some fields and "You must specify ..." on others.
   const required = Object.entries(errors).filter(([, text]) => /is required|must specify/i.test(String(text)));
   if (required.length > 0) {
     return new AtlassianFieldError(
-      `Jira rejected the create: ${required.map(([, text]) => text).join("; ")}`,
+      `Jira rejected the ${action}: ${required.map(([, text]) => text).join("; ")}`,
       "missing_required_field",
       { requiredFields: required.map(([id]) => ({ id })), errors }
     );
   }
 
   return new AtlassianFieldError(
-    `Jira rejected the create: ${Object.entries(errors).map(([id, text]) => `${id}: ${text}`).join("; ")}`,
+    `Jira rejected the ${action}: ${Object.entries(errors).map(([id, text]) => `${id}: ${text}`).join("; ")}`,
     "invalid_field_value",
     { errors }
   );
@@ -378,6 +385,61 @@ export class AtlassianClient {
       failed: results.filter((result) => result.status === "error").length,
       results,
     };
+  }
+
+  /** Raw transitions from the issue's current status, with each transition screen's fields expanded. */
+  private async fetchJiraTransitions(issueIdOrKey: string): Promise<JiraTransition[]> {
+    const key = requireNonEmpty(issueIdOrKey, "issueIdOrKey");
+    const data = await this.request<unknown>("GET", `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, {
+      query: { expand: "transitions.fields" },
+    });
+    return JiraTransitionListSchema.parse(data).transitions;
+  }
+
+  /** The transitions available from the issue's current status, with each one's target status and screen fields. */
+  async listJiraIssueTransitions(issueIdOrKey: string): Promise<JiraTransitionSummary[]> {
+    return (await this.fetchJiraTransitions(issueIdOrKey)).map(summarizeJiraTransition);
+  }
+
+  /**
+   * Moves an issue through a workflow transition. `to` names the transition by id, name, or target
+   * status. Fields resolve against the transition screen with the same id/name resolution and value
+   * coercion as `editJiraIssue`; only screen fields can be set during a move. `dryRun` returns the
+   * chosen transition and resolved payload without moving the issue.
+   */
+  async transitionJiraIssue(
+    issueIdOrKey: string,
+    input: JiraIssueTransitionInput,
+    opts: JiraIssueTransitionOptions = {}
+  ): Promise<JiraIssueTransitionResult> {
+    const transitions = await this.fetchJiraTransitions(issueIdOrKey);
+    const transition = resolveJiraTransition(transitions, input.to, issueIdOrKey);
+    const summary = summarizeJiraTransition(transition);
+    const edits = input.fields ?? {};
+
+    let plan: { fields: Record<string, unknown>; resolved: JiraIssueTransitionResult["resolved"] } = { fields: {}, resolved: [] };
+    if (Object.keys(edits).length > 0) {
+      const screen = jiraTransitionScreen(transition);
+      if (Object.keys(screen.fields).length === 0) {
+        throw new AtlassianFieldError(
+          `The "${transition.name}" transition has no screen, so no fields can be set during it; edit the issue first, then transition it`,
+          "field_not_settable",
+          { fields: Object.keys(edits), transition: { id: transition.id, name: transition.name }, settableFields: [] }
+        );
+      }
+      plan = planJiraIssueFieldEdits(screen, await this.resolveUserFieldValues(screen, edits), `the "${transition.name}" transition screen`);
+    }
+
+    if (opts.dryRun === true) return { key: issueIdOrKey, status: "dry_run", transition: summary, ...plan };
+
+    try {
+      await this.request<void>("POST", `/rest/api/3/issue/${encodeURIComponent(issueIdOrKey)}/transitions`, {
+        body: { transition: { id: transition.id }, ...(Object.keys(plan.fields).length > 0 ? { fields: plan.fields } : {}) },
+      });
+    } catch (err) {
+      throw translateCreateError(err, "transition");
+    }
+    return { key: issueIdOrKey, status: "transitioned", transition: summary, ...plan };
   }
 
   /** Project key or id for a project-scoped call, falling back to the configured default. */

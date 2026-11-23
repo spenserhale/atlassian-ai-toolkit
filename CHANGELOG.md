@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `atlassian jira transition <KEY>` lists the transitions available from an issue's current status, with each one's target status and transition screen fields. `--to <id|name|status>` moves the issue; `--field <id|name>=<value>` fills transition screen fields (for example `resolution=Done`) with the same resolution and coercion as `jira edit`. Supports `--dry-run` and `--json`. A `--to` that matches no available transition fails with `transition_not_available` and lists the valid ones.
+- MCP tools `jira_list_transitions` and `jira_transition_issue`.
+- SDK: `listJiraIssueTransitions()`, `transitionJiraIssue()`, `resolveJiraTransition()`, and `summarizeJiraTransition()`.
+
 ## [0.10.0] - 2026-11-17
 
 ### Fixed

@@ -198,6 +198,37 @@ export function registerResourceTools(server: FastMCP) {
   });
 
   server.addTool({
+    name: "jira_list_transitions",
+    description:
+      "List the workflow transitions available on a Jira issue from its current status: each transition's id, name, target status, and the fields on its transition screen (requiredFields marks the ones Jira requires). Use before jira_transition_issue to see which moves and screen fields exist.",
+    parameters: z.object({
+      issueIdOrKey: z.string().min(1).describe("Jira issue key or id"),
+    }),
+    execute: async (args) => {
+      const client = await getClient();
+      const transitions = await client.listJiraIssueTransitions(args.issueIdOrKey);
+      return JSON.stringify({ issue: args.issueIdOrKey, transitions }, null, 2);
+    },
+  });
+
+  server.addTool({
+    name: "jira_transition_issue",
+    description:
+      "Move a Jira issue to another status through a workflow transition. `to` takes a transition id, transition name, or target status name (case-insensitive). `fields` fills transition screen fields (for example { \"resolution\": \"Done\" }) with the same id/name resolution and value coercion as jira_edit_issue; only fields on the transition screen can be set. Set dryRun to validate and see the chosen transition and resolved payload without moving the issue. A `to` that matches no available transition fails with the available ones in the error details.",
+    parameters: z.object({
+      issueIdOrKey: z.string().min(1).describe("Jira issue key or id"),
+      to: z.string().min(1).describe("Transition id, transition name, or target status name, for example \"Done\""),
+      fields: z.record(z.unknown()).optional().describe("Transition screen field values keyed by field id or display name"),
+      dryRun: z.boolean().default(false).describe("Resolve and validate without moving the issue"),
+    }),
+    execute: async (args) => {
+      const client = await getClient();
+      const result = await client.transitionJiraIssue(args.issueIdOrKey, { to: args.to, fields: args.fields }, { dryRun: args.dryRun });
+      return JSON.stringify(result, null, 2);
+    },
+  });
+
+  server.addTool({
     name: "jira_create_issue",
     description:
       "Create one Jira issue, or a batch of them. The issue type and every field are resolved against the project's create screen, so pass plain values (\"Bug\", \"Support\", 2, \"a,b\") rather than Jira payload objects, and a markdown description is converted to ADF. Set dryRun to see the full resolved payload without writing. Returns the new issue key, id, and browse URL. A rejected create reports the project's issue types, the required fields, or the settable fields, so the retry needs no extra metadata call.",

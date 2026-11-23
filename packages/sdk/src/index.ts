@@ -35,6 +35,7 @@ export {
   planJiraIssueFieldEdits,
   resolveJiraField,
 } from "./jira-fields.js";
+export { jiraTransitionScreen, resolveJiraTransition, summarizeJiraTransition } from "./jira-transitions.js";
 export {
   AtlassianAuthError,
   AtlassianConfigError,
@@ -77,6 +78,9 @@ export type {
   JiraIssueEditPlan,
   JiraIssueEditResult,
   JiraIssueFieldEdits,
+  JiraIssueTransitionInput,
+  JiraIssueTransitionOptions,
+  JiraIssueTransitionResult,
   JiraRequiredFieldGap,
   JiraResolvedFieldEdit,
   JiraSearchOptions,
@@ -94,6 +98,10 @@ export type {
   JiraSprintPoints,
   JiraSprintPointsOptions,
   JiraSprintState,
+  JiraTransition,
+  JiraTransitionList,
+  JiraTransitionStatus,
+  JiraTransitionSummary,
   JiraUser,
   MoveJiraSprintIssuesInput,
   UpdateJiraSprintInput,
@@ -122,6 +130,9 @@ export {
   JiraSprintListSchema,
   JiraSprintSchema,
   JiraSprintStateSchema,
+  JiraTransitionListSchema,
+  JiraTransitionSchema,
+  JiraTransitionStatusSchema,
   JiraUserListSchema,
   JiraUserSchema,
 } from "./types.js";

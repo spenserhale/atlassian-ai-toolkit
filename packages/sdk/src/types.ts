@@ -318,6 +318,68 @@ export interface JiraIssueEditBatchResult {
   readonly results: readonly JiraIssueEditEntry[];
 }
 
+/** A workflow status as a transition reports its target. */
+export const JiraTransitionStatusSchema = z.object({
+  id: z.string().optional(),
+  name: z.string(),
+  statusCategory: z.object({ key: z.string().optional(), name: z.string().optional() }).passthrough().optional(),
+}).passthrough();
+
+export type JiraTransitionStatus = z.infer<typeof JiraTransitionStatusSchema>;
+
+/**
+ * One transition available from an issue's current status. `fields` is present when the request
+ * expands `transitions.fields`, and has the same per-field shape as `editmeta`: it is the
+ * transition screen, so it is empty for a transition without one.
+ */
+export const JiraTransitionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  to: JiraTransitionStatusSchema,
+  hasScreen: z.boolean().optional(),
+  isAvailable: z.boolean().optional(),
+  isConditional: z.boolean().optional(),
+  fields: z.record(JiraEditMetaFieldSchema).optional(),
+}).passthrough();
+
+export type JiraTransition = z.infer<typeof JiraTransitionSchema>;
+
+export const JiraTransitionListSchema = z.object({
+  transitions: z.array(JiraTransitionSchema).default([]),
+}).passthrough();
+
+export type JiraTransitionList = z.infer<typeof JiraTransitionListSchema>;
+
+/** A transition as reported back to callers: enough to choose one and see what its screen takes. */
+export interface JiraTransitionSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly to: { readonly id?: string; readonly name: string; readonly category?: string };
+  readonly hasScreen: boolean;
+  /** Fields on the transition screen; only these can be set during the move. */
+  readonly fields: readonly JiraSettableField[];
+  /** Screen fields Jira marks required. Some may already hold a value on the issue. */
+  readonly requiredFields: readonly JiraSettableField[];
+}
+
+export interface JiraIssueTransitionInput {
+  /** Transition id, transition name, or target status name; names match case-insensitively. */
+  readonly to: string;
+  /** Transition screen field values keyed by field id or display name. */
+  readonly fields?: JiraFieldEdits;
+}
+
+export interface JiraIssueTransitionOptions {
+  /** Resolve and validate the transition and its fields without moving the issue. */
+  readonly dryRun?: boolean;
+}
+
+export interface JiraIssueTransitionResult extends JiraIssueEditPlan {
+  readonly key: string;
+  readonly status: "transitioned" | "dry_run";
+  readonly transition: JiraTransitionSummary;
+}
+
 export const JiraCreateMetaIssueTypeSchema = z.object({
   id: z.string(),
   name: z.string(),
