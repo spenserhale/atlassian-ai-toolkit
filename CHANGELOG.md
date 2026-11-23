@@ -6,12 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-23
+
 ### Added
 
 - `atlassian jira transition <KEY>` lists the transitions available from an issue's current status, with each one's target status and transition screen fields. `--to <id|name|status>` moves the issue; `--field <id|name>=<value>` fills transition screen fields (for example `resolution=Done`) with the same resolution and coercion as `jira edit`. Supports `--dry-run` and `--json`. A `--to` that matches no available transition fails with `transition_not_available` and lists the valid ones.
 - MCP tools `jira_list_transitions` and `jira_transition_issue`.
 - MCP tool errors from the SDK now carry the error `code` and `details` as `structuredContent`, so clients get the valid transitions, settable fields, and similar recovery data as data rather than prose.
 - SDK: `listJiraIssueTransitions()`, `transitionJiraIssue()`, `resolveJiraTransition()`, and `summarizeJiraTransition()`.
+- **`atlassian confluence get` returns the page body.** Markdown is the default, with `--format storage|adf` as alternatives. Every read includes the version number.
+  - **Size guard:** bodies over 12,000 characters print the outline with section sizes, plus a hint. `--full` turns it off.
+  - **Section reads:** `--outline` and `--section` (by heading, `Parent > Child` path, or path with `[n]`) return part of a page. `--meta` returns no body, and `--draft` reads the unpublished draft.
+  - **Lossy content:** content markdown cannot express shows as a visible `[[cf:...]]` placeholder and is counted in `lossy`.
+- **`atlassian confluence search`:**
+  - `--cql`, or `--text` with `--space` and `--type`.
+  - `--limit` (default 10) and cursor paging, with an `isLast` / `nextCursor` envelope.
+  - `--fields` (`id`, `title`, `space`, `type`, `modified`, `excerpt`, `url`, `version`, `ancestors`, `status`).
+  - `--excerpt none|short|full`. `short` is 90 characters with highlight markers removed.
+- **`atlassian confluence create`:**
+  - `--parent` (the space comes from the parent) or `--space`.
+  - A markdown, storage, or ADF body, plus `--draft` and `--label`.
+  - `--dry-run` shows the space, the ancestor path, and the body size.
+  - Errors: `title_exists`, `parent_not_found`, `space_not_found`, `permission_denied`, and `body_too_large`.
+- **`atlassian confluence edit`:**
+  - **Targeted edits** leave the rest of the stored page untouched, macros and images included: `--replace-section`, `--append`, `--prepend`, `--find` / `--replace` (with `--all`), and `--title`.
+  - **Whole-body replace** requires `--expect-version`.
+  - **Errors:**
+    - `version_conflict`, `approval_required`, and `write_outcome_unknown`;
+    - `lossy_replace` (unless `--allow-lossy`), `placeholder_in_body`, and `legacy_editor_page`;
+    - `section_not_found`, `section_ambiguous`, `no_match`, and `multiple_matches`.
+  - **Retry:** a targeted edit other than a section replace retries once when the page changed during the write.
+  - **Drafts:** the output warns when an unpublished draft exists.
+- MCP tools `confluence_search`, `confluence_create_page`, and `confluence_edit_page`. `confluence_get_page` gains the read options.
+- SDK:
+  - page methods: `getConfluencePageContent()`, `searchConfluence()`, `createConfluencePage()`, `editConfluencePage()`;
+  - `adfToMarkdown()` with `lossy` reporting, plus section helpers;
+  - pure edit operations on ADF.
+- `markdownToAdf` gains backslash escapes, task lists, and GitHub tables, so `jira create` and `jira edit` gain them too.
+
+### Changed
+
+- **Errors:** CLI errors share one serializer, so `--json` errors carry `details` and `hint` together. Config errors still exit 3.
+- **Backslash escapes:** in markdown written to Jira, a backslash before punctuation is now an escape, as CommonMark specifies.
+- **Code fences:** a fenced code block closes only on a fence at least as long as the opening one.
+- **`confluence get`:** it no longer prints only id, title, and status. It prints the full header and the body.
 
 ## [0.10.0] - 2026-11-17
 

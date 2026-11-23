@@ -18,19 +18,32 @@ export function errorCode(err: unknown): string {
   return "usage_error";
 }
 
+/** The structured form of a failure, shared by every command so `--json` errors look the same everywhere. */
+export function errorPayload(err: unknown): Record<string, unknown> {
+  const message = err instanceof Error ? err.message : String(err);
+  const code = err instanceof UsageError ? "usage_error" : errorCode(err);
+  const details = err instanceof AtlassianError && !(err instanceof AtlassianConfigError) ? err.details : undefined;
+  const hint = err instanceof UsageError || err instanceof AtlassianConfigError ? err.hint : undefined;
+  const reason = err instanceof AtlassianConfigError ? err.reason : undefined;
+  const validValues = err instanceof UsageError ? err.validValues : undefined;
+  return { status: "error", code, message, details, reason, valid_values: validValues, hint };
+}
+
 /**
- * Prints a failure and exits non-zero. Field errors carry the recovery data (issue types, required
- * fields, settable fields, allowed values), so the details ride along with the code.
+ * Prints a failure and exits non-zero: 2 for usage errors, 3 for config errors, 1 otherwise. With
+ * `--json` the failure goes to stdout so agents can parse it; field errors carry their recovery data
+ * (issue types, required fields, settable fields, allowed values, conflicting versions) in `details`.
  */
 export function handleError(err: unknown, json: boolean): never {
-  const message = err instanceof Error ? err.message : String(err);
+  const payload = errorPayload(err);
   if (json) {
-    console.log(JSON.stringify({ status: "error", code: errorCode(err), message, details: err instanceof AtlassianError ? err.details : undefined }, null, 2));
+    console.log(JSON.stringify(payload, null, 2));
   } else {
-    console.error(`error: ${message}`);
-    if (err instanceof AtlassianError && err.details !== undefined && err.details !== null) {
-      console.error(`details: ${JSON.stringify(err.details)}`);
-    }
+    console.error(`error: ${String(payload.message)}`);
+    if (payload.reason) console.error(`reason: ${String(payload.reason)}`);
+    if (payload.details !== undefined && payload.details !== null) console.error(`details: ${JSON.stringify(payload.details)}`);
+    if (Array.isArray(payload.valid_values)) console.error(`valid values: ${payload.valid_values.join(", ")}`);
+    if (payload.hint) console.error(`hint: ${String(payload.hint)}`);
   }
   process.exit(exitCodeFor(err));
 }
@@ -62,19 +75,6 @@ export async function runCommand(json: boolean, body: () => Promise<void>): Prom
   try {
     await body();
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const hint = err instanceof UsageError || err instanceof AtlassianConfigError ? err.hint : undefined;
-    const validValues = err instanceof UsageError ? err.validValues : undefined;
-    const reason = err instanceof AtlassianConfigError ? err.reason : undefined;
-    const code = err instanceof UsageError ? "usage_error" : err instanceof AtlassianConfigError ? "config_error" : errorCode(err);
-    if (json) {
-      console.log(JSON.stringify({ status: "error", code, message, reason, valid_values: validValues, hint }, null, 2));
-    } else {
-      console.error(`error: ${message}`);
-      if (reason) console.error(`reason: ${reason}`);
-      if (validValues) console.error(`valid values: ${validValues.join(", ")}`);
-      if (hint) console.error(`hint: ${hint}`);
-    }
-    process.exit(exitCodeFor(err));
+    handleError(err, json);
   }
 }

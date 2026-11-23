@@ -255,6 +255,61 @@ atlassian jira sprint create --name "Sprint 43" --goal "Ship search"
 An explicit board (`sprint current 42`, `--board 42`) still wins over the environment; without
 either, the command fails with a hint to set `ATLASSIAN_JIRA_BOARD_ID`.
 
+## Confluence Pages
+
+Read, search, create, and edit pages without a format guide. Markdown is the default body format
+for both reading and writing.
+
+```sh
+# Read: metadata, version, and the body as markdown. Bodies over 12,000 chars print the outline.
+atlassian confluence get 123456
+atlassian confluence get 123456 --section "Release steps"      # one section; repeatable
+atlassian confluence get 123456 --outline                      # headings and section sizes
+atlassian confluence get 123456 --format storage --full        # raw storage XHTML
+
+# Search with CQL, or with --text plus an optional --space
+atlassian confluence search --text "release checklist" --space ENG
+atlassian confluence search --cql "label = runbook" --limit 25 --fields id,title,url --cursor <c>
+
+# Create under a parent (the space comes from it); --dry-run checks placement first
+atlassian confluence create --title "Q3 runbook" --parent 123456 --body-file runbook.md --dry-run
+
+# Targeted edits leave macros and images elsewhere on the page untouched
+atlassian confluence edit 123456 --replace-section "Rollout" --body-file rollout.md
+atlassian confluence edit 123456 --find "v1.4" --replace "v1.5" --all --message "Bump version"
+
+# A whole-body replace needs the version you read
+atlassian confluence edit 123456 --body-file page.md --expect-version 14
+```
+
+**Lossy content.** Content markdown cannot express shows as a visible placeholder, such as
+`[[cf:macro toc]]` or `[[cf:image diagram.png]]`. Panels, expands, layouts, and macros with a body
+show their content between `[[cf:panel info]]` and `[[/cf:panel]]` markers. The `lossy:` line counts
+each kind, and so does the `lossy` list in JSON.
+
+**Safety checks on writes:**
+
+- A markdown write that would remove that content fails with `lossy_replace` unless you pass
+  `--allow-lossy`. This applies to a whole-body replace, or to a section replace whose section holds
+  such content.
+- Placeholders are for display only. A body containing one fails with `placeholder_in_body`.
+- A stale `--expect-version` fails with `version_conflict`, which reports the expected and current
+  versions, and nothing is written.
+- ADF writes to legacy-editor pages are refused with `legacy_editor_page`. Replace the whole body
+  with `--format storage` instead.
+
+**Supported markdown** (it round-trips):
+
+- headings, paragraphs, and line breaks
+- `**bold**`, `*em*`, `~~strike~~`, `` `code` ``, and `[links](url)`. Marks do not nest.
+- backslash escapes
+- nested bullet and ordered lists, and `- [ ]` / `- [x]` task lists
+- fenced code, quotes, and `---` rules
+- GitHub tables with one header row and inline cells
+
+**Watchers.** Confluence's v2 API has no minor-edit switch, so `create` and `edit` have no
+`--notify`. Watchers get Confluence's default notifications.
+
 ## Attachments
 
 Upload one or more files to a Jira issue. Repeat `--file` for multiple uploads; the stored filename is the file's basename and the MIME type is inferred from its extension.

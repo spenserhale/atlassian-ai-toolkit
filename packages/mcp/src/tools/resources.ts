@@ -4,6 +4,7 @@ import type { FastMCP } from "fastmcp";
 import { z } from "zod";
 import { AtlassianClient, AtlassianNotFoundError, JIRA_SPRINT_ISSUE_MOVE_LIMIT, loadConfig, loadCredentials, redactedConfig } from "@atlassian-ai-toolkit/sdk";
 import type {
+  ConfluenceEditOperation,
   JiraAttachmentUpload,
   JiraIssueCreateInput,
   JiraIssueFieldEdits,
@@ -595,13 +596,116 @@ export function registerResourceTools(server: FastMCP) {
 
   server.addTool({
     name: "confluence_get_page",
-    description: "Get one Confluence page by id.",
+    description:
+      "Read a Confluence page: id, title, space, status, version (pass it to confluence_edit_page as expectVersion), parent, url, and the body. Markdown is the default format. Content markdown cannot express shows as [[cf:kind ...]] placeholders and is counted in `lossy`. Bodies over 12,000 characters return the outline with section sizes instead; ask for `sections` or set `full`.",
     parameters: z.object({
-      pageId: z.string().describe("Confluence page id"),
+      pageId: z.string().min(1).describe("Confluence page id"),
+      format: z.enum(["markdown", "storage", "adf"]).default("markdown").describe("Body format"),
+      outline: z.boolean().default(false).describe("Headings and section sizes only"),
+      sections: z.array(z.string()).optional().describe('Sections to return, by heading, "Parent > Child" path, or path with " [n]"'),
+      meta: z.boolean().default(false).describe("Metadata only, no body"),
+      full: z.boolean().default(false).describe("Return the whole body even over the size guard"),
+      draft: z.boolean().default(false).describe("Read the unpublished draft when one exists"),
     }),
     execute: async (args) => {
-      const page = await (await getClient()).getConfluencePage(args.pageId);
-      return JSON.stringify(page, null, 2);
+      const page = await (await getClient()).getConfluencePageContent(args.pageId, args);
+      return JSON.stringify(page);
+    },
+  });
+
+  server.addTool({
+    name: "confluence_search",
+    description:
+      'Search Confluence with CQL, or with `text` (siteSearch) narrowed by `space` and `type` (default page). Returns id, title, space, type, modified (ISO date), and a 90-character excerpt per hit by default, plus `isLast` and `nextCursor` for the next page. `fields` picks from id, title, space, type, modified, excerpt, url, version, ancestors, status.',
+    parameters: z.object({
+      cql: z.string().optional().describe("CQL query"),
+      text: z.string().optional().describe("Words to search for, instead of cql"),
+      space: z.string().optional().describe("Space key to narrow text"),
+      type: z.string().optional().describe("Content type to narrow text; default page"),
+      limit: z.number().int().positive().default(10).describe("Results per page"),
+      cursor: z.string().optional().describe("nextCursor from a previous page"),
+      fields: z.array(z.enum(["id", "title", "space", "type", "modified", "excerpt", "url", "version", "ancestors", "status"])).optional().describe("Fields to return"),
+      excerpt: z.enum(["none", "short", "full"]).default("short").describe("Excerpt length"),
+    }),
+    execute: async (args) => JSON.stringify(await (await getClient()).searchConfluence(args)),
+  });
+
+  server.addTool({
+    name: "confluence_create_page",
+    description:
+      "Create a Confluence page under a parent (the space comes from the parent) or in a space. The body is markdown by default (headings, lists, task lists, tables, code, quotes, links, inline marks), or storage or ADF. A title already in the space fails with title_exists. Set dryRun to check the space, the parent's ancestor path, and the body size first. Returns id, title, version, status, and url; never the body.",
+    parameters: z.object({
+      title: z.string().min(1).describe("Page title"),
+      parentId: z.string().optional().describe("Parent page id"),
+      space: z.string().optional().describe("Space key or id, when there is no parent"),
+      body: z.string().describe("Page body"),
+      format: z.enum(["markdown", "storage", "adf"]).default("markdown").describe("Body format"),
+      draft: z.boolean().default(false).describe("Create an unpublished draft"),
+      labels: z.array(z.string()).optional().describe("Labels to add"),
+      dryRun: z.boolean().default(false).describe("Resolve placement and body without creating"),
+    }),
+    execute: async (args) => {
+      if ((args.parentId === undefined) === (args.space === undefined)) throw new Error("Pass exactly one of parentId or space");
+      const result = await (await getClient()).createConfluencePage(
+        { title: args.title, parentId: args.parentId, space: args.space, body: { value: args.body, format: args.format }, draft: args.draft, labels: args.labels },
+        { dryRun: args.dryRun }
+      );
+      return JSON.stringify(result);
+    },
+  });
+
+  server.addTool({
+    name: "confluence_edit_page",
+    description:
+      "Edit a Confluence page. Targeted operations change only that part and leave macros and images elsewhere untouched: replaceSection (heading, path, or path [n]) with a body, append or prepend a body, findReplace (exact text; must match once unless all), or a title change. replaceBody replaces the whole page and requires expectVersion. A stale expectVersion fails with version_conflict; replacing content markdown cannot carry fails with lossy_replace unless allowLossy. Set dryRun to see sizes and match counts first. Returns id, title, new version, and url; never the body.",
+    parameters: z.object({
+      pageId: z.string().min(1).describe("Confluence page id"),
+      operation: z.enum(["replaceSection", "append", "prepend", "findReplace", "replaceBody"]).optional().describe("Body operation; omit for a title-only change"),
+      section: z.string().optional().describe("Section selector for replaceSection"),
+      body: z.string().optional().describe("Body for replaceSection, append, prepend, or replaceBody"),
+      format: z.enum(["markdown", "adf", "storage"]).default("markdown").describe("Body format; storage only for replaceBody"),
+      find: z.string().optional().describe("Exact text for findReplace"),
+      replace: z.string().optional().describe("Replacement text for findReplace"),
+      all: z.boolean().default(false).describe("Replace every findReplace match"),
+      title: z.string().optional().describe("New title"),
+      expectVersion: z.number().int().positive().optional().describe("Version you read; required for replaceBody"),
+      message: z.string().optional().describe("Version comment"),
+      allowLossy: z.boolean().default(false).describe("Write even if markdown replaces content it cannot carry"),
+      dryRun: z.boolean().default(false).describe("Report what would change without writing"),
+    }),
+    execute: async (args) => {
+      const body = { value: args.body, format: args.format };
+      const need = (value: string | undefined, name: string) => {
+        if (value === undefined) throw new Error(`${args.operation} needs ${name}`);
+        return value;
+      };
+      let operation: ConfluenceEditOperation | undefined;
+      switch (args.operation) {
+        case "replaceSection":
+          need(args.body, "body");
+          operation = { kind: "replaceSection", section: need(args.section, "section"), body };
+          break;
+        case "append":
+        case "prepend":
+          need(args.body, "body");
+          operation = { kind: args.operation, body };
+          break;
+        case "findReplace":
+          operation = { kind: "findReplace", find: need(args.find, "find"), replace: need(args.replace, "replace"), all: args.all };
+          break;
+        case "replaceBody":
+          need(args.body, "body");
+          operation = { kind: "replaceBody", body };
+          break;
+        case undefined:
+          if (args.title === undefined) throw new Error("Provide an operation or a title");
+      }
+      const result = await (await getClient()).editConfluencePage(
+        args.pageId,
+        { operation, title: args.title },
+        { dryRun: args.dryRun, expectVersion: args.expectVersion, allowLossy: args.allowLossy, message: args.message }
+      );
+      return JSON.stringify(result);
     },
   });
 

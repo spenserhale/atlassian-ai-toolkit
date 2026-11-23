@@ -23,7 +23,10 @@ MCP server for Atlassian Cloud, built with [FastMCP](https://github.com/punkpeye
 | `jira_rollover_sprint_issues` | Preview or move sprint issues to another sprint or the backlog with `force` + `confirm` |
 | `jira_delete_sprint` | Preview or permanently delete a sprint with `force` + `confirm`; open issues move to the backlog |
 | `jira_add_attachment` | Upload file attachments to a Jira issue |
-| `confluence_get_page` | Get a Confluence page by ID |
+| `confluence_get_page` | Read a page as markdown, storage, or ADF, with version, `lossy` report, size guard, `outline`, `sections`, `draft` |
+| `confluence_search` | CQL or `text` search with `limit`, `cursor`, `fields`, `excerpt`; returns `isLast` / `nextCursor` |
+| `confluence_create_page` | Create a page under a parent or in a space from markdown, storage, or ADF; `draft`, `labels`, `dryRun` |
+| `confluence_edit_page` | Replace a section, append, prepend, find/replace, retitle, or replace the body (needs `expectVersion`); `dryRun` |
 | `confluence_upload_attachment` | Upload one local file as an attachment to a Confluence page |
 | `confluence_delete_page` | Preview, trash, or purge a Confluence page with `force` + `confirm` |
 

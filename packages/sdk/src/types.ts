@@ -188,10 +188,219 @@ export const ConfluencePageSchema = z.object({
   status: z.string().optional(),
   title: z.string().optional(),
   spaceId: z.string().optional(),
-  parentId: z.string().optional(),
+  parentId: z.string().nullish(),
+  version: z.object({ number: z.number(), message: z.string().optional(), createdAt: z.string().optional() }).passthrough().optional(),
+  body: z.record(z.object({ value: z.string().optional(), representation: z.string().optional() }).passthrough()).optional(),
+  _links: z.object({ webui: z.string().optional(), base: z.string().optional(), tinyui: z.string().optional() }).passthrough().optional(),
 }).passthrough();
 
 export type ConfluencePage = z.infer<typeof ConfluencePageSchema>;
+
+export const ConfluenceSpaceSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  name: z.string().optional(),
+  homepageId: z.string().nullish(),
+}).passthrough();
+
+export type ConfluenceSpace = z.infer<typeof ConfluenceSpaceSchema>;
+
+export const ConfluenceSpaceListSchema = z.object({ results: z.array(ConfluenceSpaceSchema).default([]) }).passthrough();
+
+export const ConfluenceAncestorListSchema = z.object({
+  results: z.array(z.object({ id: z.string(), type: z.string().optional() }).passthrough()).default([]),
+}).passthrough();
+
+export const ConfluencePropertyListSchema = z.object({
+  results: z.array(z.object({ key: z.string(), value: z.unknown() }).passthrough()).default([]),
+}).passthrough();
+
+export const ConfluenceSearchResultSchema = z.object({
+  content: z
+    .object({
+      id: z.string(),
+      type: z.string().optional(),
+      status: z.string().optional(),
+      title: z.string().optional(),
+      space: z.object({ key: z.string().optional(), id: z.union([z.string(), z.number()]).optional() }).passthrough().optional(),
+      version: z.object({ number: z.number().optional() }).passthrough().optional(),
+      ancestors: z.array(z.object({ id: z.string(), title: z.string().optional() }).passthrough()).optional(),
+      _links: z.object({ webui: z.string().optional() }).passthrough().optional(),
+    })
+    .passthrough()
+    .optional(),
+  title: z.string().optional(),
+  excerpt: z.string().optional(),
+  url: z.string().optional(),
+  entityType: z.string().optional(),
+  lastModified: z.string().optional(),
+  resultGlobalContainer: z.object({ title: z.string().optional(), displayUrl: z.string().optional() }).passthrough().optional(),
+}).passthrough();
+
+export const ConfluenceSearchPageSchema = z.object({
+  results: z.array(ConfluenceSearchResultSchema).default([]),
+  totalSize: z.number().optional(),
+  size: z.number().optional(),
+  _links: z.object({ next: z.string().optional(), base: z.string().optional() }).passthrough().optional(),
+}).passthrough();
+
+export type ConfluenceBodyFormat = "markdown" | "storage" | "adf";
+
+export interface ConfluenceSpaceRef {
+  readonly id: string;
+  readonly key?: string;
+}
+
+export interface ConfluencePageGetOptions {
+  readonly format?: ConfluenceBodyFormat;
+  readonly draft?: boolean;
+  /** Return metadata only. */
+  readonly meta?: boolean;
+  /** Return headings and section sizes instead of the body. */
+  readonly outline?: boolean;
+  /** Return only these sections; each is a heading, a `Parent > Child` path, or a path with ` [n]`. */
+  readonly sections?: readonly string[];
+  /** Turn the size guard off. */
+  readonly full?: boolean;
+  /** Size guard threshold in body characters; defaults to 12,000. */
+  readonly maxChars?: number;
+}
+
+export interface ConfluenceOutline {
+  readonly intro: number;
+  readonly sections: ReadonlyArray<{ readonly selector: string; readonly level: number; readonly title: string; readonly chars: number }>;
+}
+
+export interface ConfluencePageContent {
+  readonly id: string;
+  readonly title: string;
+  readonly space: ConfluenceSpaceRef;
+  readonly status: string;
+  readonly version: number;
+  readonly parentId?: string;
+  readonly url?: string;
+  readonly format: ConfluenceBodyFormat;
+  /** Markdown or storage text, or an ADF document; absent with `meta`, `outline`, `sections`, or a tripped size guard. */
+  readonly body?: unknown;
+  /** Characters in the full body, in the requested format. */
+  readonly bodyChars?: number;
+  readonly lossy: ReadonlyArray<{ readonly kind: string; readonly count: number; readonly details?: readonly string[]; readonly dropped: boolean }>;
+  readonly outline?: ConfluenceOutline;
+  readonly sections?: ReadonlyArray<{ readonly selector: string; readonly chars: number; readonly body: unknown }>;
+  /** Set when the size guard replaced the body with the outline. */
+  readonly guard?: { readonly threshold: number; readonly hint: string };
+}
+
+export type ConfluenceSearchField = "id" | "title" | "space" | "type" | "modified" | "excerpt" | "url" | "version" | "ancestors" | "status";
+
+export const CONFLUENCE_SEARCH_FIELDS: readonly ConfluenceSearchField[] = ["id", "title", "space", "type", "modified", "excerpt", "url", "version", "ancestors", "status"];
+export const CONFLUENCE_SEARCH_DEFAULT_FIELDS: readonly ConfluenceSearchField[] = ["id", "title", "space", "type", "modified", "excerpt"];
+
+export interface ConfluenceSearchOptions {
+  readonly cql?: string;
+  /** Shorthand: `siteSearch ~ "<text>"`, narrowed by `space` and `type`. */
+  readonly text?: string;
+  readonly space?: string;
+  readonly type?: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly fields?: readonly ConfluenceSearchField[];
+  readonly excerpt?: "none" | "short" | "full";
+}
+
+export interface ConfluenceSearchHit {
+  readonly id?: string;
+  readonly title?: string;
+  readonly space?: string;
+  readonly type?: string;
+  readonly modified?: string;
+  readonly excerpt?: string;
+  readonly url?: string;
+  readonly version?: number;
+  readonly ancestors?: ReadonlyArray<{ readonly id: string; readonly title?: string }>;
+  readonly status?: string;
+}
+
+export interface ConfluenceSearchResult {
+  readonly cql: string;
+  readonly results: readonly ConfluenceSearchHit[];
+  readonly count: number;
+  readonly total?: number;
+  readonly isLast: boolean;
+  readonly nextCursor?: string;
+}
+
+export interface ConfluenceBodyInput {
+  /** Markdown or storage text, or an ADF document (object or JSON string). */
+  readonly value: unknown;
+  readonly format?: ConfluenceBodyFormat;
+}
+
+export interface ConfluencePageCreateInput {
+  readonly title: string;
+  readonly parentId?: string;
+  /** Space key or id; ignored in favour of the parent's space when `parentId` is set. */
+  readonly space?: string;
+  readonly body: ConfluenceBodyInput;
+  readonly draft?: boolean;
+  readonly labels?: readonly string[];
+}
+
+export interface ConfluencePageCreateResult {
+  readonly status: "created" | "dry_run" | "created_with_errors";
+  readonly id?: string;
+  readonly title: string;
+  readonly version?: number;
+  readonly pageStatus: string;
+  readonly url?: string;
+  readonly space: ConfluenceSpaceRef;
+  readonly parent?: { readonly id: string; readonly title?: string; readonly ancestors: ReadonlyArray<{ readonly id: string; readonly title?: string }> };
+  readonly format: ConfluenceBodyFormat;
+  readonly bodyChars: number;
+  readonly labels?: readonly string[];
+  readonly failedLabels?: readonly string[];
+  readonly labelError?: string;
+}
+
+export type ConfluenceEditOperation =
+  | { readonly kind: "replaceSection"; readonly section: string; readonly body: ConfluenceBodyInput }
+  | { readonly kind: "append"; readonly body: ConfluenceBodyInput }
+  | { readonly kind: "prepend"; readonly body: ConfluenceBodyInput }
+  | { readonly kind: "findReplace"; readonly find: string; readonly replace: string; readonly all?: boolean }
+  | { readonly kind: "replaceBody"; readonly body: ConfluenceBodyInput };
+
+export interface ConfluencePageEditInput {
+  readonly operation?: ConfluenceEditOperation;
+  readonly title?: string;
+}
+
+export interface ConfluencePageEditOptions {
+  readonly dryRun?: boolean;
+  /** The version the caller read; the edit fails with `version_conflict` if the page moved on. */
+  readonly expectVersion?: number;
+  /** Write even when markdown would replace content it cannot carry. */
+  readonly allowLossy?: boolean;
+  readonly message?: string;
+}
+
+export interface ConfluencePageEditResult {
+  readonly status: "updated" | "dry_run";
+  readonly id: string;
+  readonly title: string;
+  /** The version written, or that would be written on a dry run. */
+  readonly version: number;
+  readonly previousVersion: number;
+  readonly url?: string;
+  readonly operation: string;
+  readonly section?: string;
+  readonly matches?: number;
+  /** Body size in markdown characters before and after (storage characters for a storage replace). */
+  readonly chars?: { readonly before: number; readonly after: number };
+  /** Content the edit replaces that markdown could not carry; only present with `allowLossy`. */
+  readonly lossy?: ReadonlyArray<{ readonly kind: string; readonly count: number }>;
+  readonly draft?: "exists";
+  readonly retried?: boolean;
+}
 
 export const ConfluenceAttachmentSchema = z.object({
   id: z.string(),

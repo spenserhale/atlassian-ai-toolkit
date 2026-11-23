@@ -168,4 +168,44 @@ describe("isAdfDocument", () => {
     expect(isAdfDocument({ type: "doc", version: 1, content: [] })).toBe(true);
     expect(isAdfDocument("# not adf")).toBe(false);
   });
+  it("treats a backslash before punctuation as an escape", () => {
+    expect(markdownToAdf("\\*not em\\* and \\# and C:\\Temp").content[0]).toEqual({
+      type: "paragraph",
+      content: [{ type: "text", text: "*not em* and # and C:\\Temp" }],
+    });
+  });
+
+  it("converts a task list, with a generated local id on the list and each item", () => {
+    const [list] = markdownToAdf("- [ ] todo\n- [x] done").content;
+    expect(list).toEqual({
+      type: "taskList",
+      attrs: { localId: expect.any(String) },
+      content: [
+        { type: "taskItem", attrs: { localId: expect.any(String), state: "TODO" }, content: [{ type: "text", text: "todo" }] },
+        { type: "taskItem", attrs: { localId: expect.any(String), state: "DONE" }, content: [{ type: "text", text: "done" }] },
+      ],
+    });
+  });
+
+  it("keeps a list a bullet list when only some items are tasks", () => {
+    expect(markdownToAdf("- [ ] todo\n- plain").content[0]?.type).toBe("bulletList");
+  });
+
+  it("converts a GitHub-style table with a header row and inline cells", () => {
+    const [table] = markdownToAdf("| A | B |\n|---|:-:|\n| **x** | y \\| z |\n| only |").content;
+    const cell = (type: string, content: AdfNode[]) => ({ type, attrs: {}, content: [{ type: "paragraph", content }] });
+    expect(table).toEqual({
+      type: "table",
+      content: [
+        { type: "tableRow", content: [cell("tableHeader", [{ type: "text", text: "A" }]), cell("tableHeader", [{ type: "text", text: "B" }])] },
+        { type: "tableRow", content: [cell("tableCell", [{ type: "text", text: "x", marks: [{ type: "strong" }] }]), cell("tableCell", [{ type: "text", text: "y | z" }])] },
+        { type: "tableRow", content: [cell("tableCell", [{ type: "text", text: "only" }]), cell("tableCell", [])] },
+      ],
+    });
+  });
+
+  it("does not close a fenced block on a shorter inner fence", () => {
+    const [code] = markdownToAdf("````\n```\ninner\n```\n````").content;
+    expect(code).toEqual({ type: "codeBlock", content: [{ type: "text", text: "```\ninner\n```" }] });
+  });
 });
