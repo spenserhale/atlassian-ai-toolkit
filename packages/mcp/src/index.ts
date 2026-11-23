@@ -1,10 +1,13 @@
 import { FastMCP } from "fastmcp";
+import { withStructuredErrors } from "./errors.js";
 import { registerResourceTools } from "./tools/resources.js";
 
-const server = new FastMCP({
-  name: "atlassian-ai-toolkit",
-  version: "0.10.0",
-});
+const server = withStructuredErrors(
+  new FastMCP({
+    name: "atlassian-ai-toolkit",
+    version: "0.10.0",
+  })
+);
 
 // Register tool groups
 registerResourceTools(server);
