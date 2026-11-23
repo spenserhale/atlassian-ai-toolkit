@@ -5,7 +5,7 @@ import { registerResourceTools } from "./tools/resources.js";
 const server = withStructuredErrors(
   new FastMCP({
     name: "atlassian-ai-toolkit",
-    version: "0.10.0",
+    version: "0.11.0",
   })
 );
 

@@ -3,7 +3,10 @@ import { confluenceAttachmentRoutes } from "./commands/confluence-attachment.js"
 import { jiraAttachCommand } from "./commands/jira-attach.js";
 import { jiraCreateCommand } from "./commands/jira-create.js";
 import { confluenceDeleteCommand } from "./commands/confluence-delete.js";
+import { confluenceCreateCommand } from "./commands/confluence-create.js";
+import { confluenceEditCommand } from "./commands/confluence-edit.js";
 import { confluenceGetCommand } from "./commands/confluence-get.js";
+import { confluenceSearchCommand } from "./commands/confluence-search.js";
 import { jiraDeleteCommand } from "./commands/jira-delete.js";
 import { jiraEditCommand } from "./commands/jira-edit.js";
 import { jiraGetCommand } from "./commands/jira-get.js";
@@ -34,6 +37,9 @@ const jiraRoutes = buildRouteMap({
 const confluenceRoutes = buildRouteMap({
   routes: {
     get: confluenceGetCommand,
+    search: confluenceSearchCommand,
+    create: confluenceCreateCommand,
+    edit: confluenceEditCommand,
     delete: confluenceDeleteCommand,
     attachment: confluenceAttachmentRoutes,
   },

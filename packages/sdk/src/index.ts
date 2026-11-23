@@ -23,7 +23,28 @@ export {
   SECRET_CREDENTIAL_KEYS,
 } from "./secrets.js";
 export type { CredentialResource, KeychainReadResult, KeychainStatus, SecretStore } from "./secrets.js";
-export { isAdfDocument, markdownToAdf } from "./adf.js";
+export { isAdfDocument, markdownToAdf, unescapeMarkdown } from "./adf.js";
+export {
+  adfLossyIn,
+  adfOutline,
+  adfToMarkdown,
+  containsConfluencePlaceholder,
+  findAdfSection,
+  formatLossy,
+  listAdfSections,
+} from "./adf-markdown.js";
+export type { AdfMarkdownResult, AdfOutlineEntry, AdfSection, ConfluenceLossyItem } from "./adf-markdown.js";
+export { appendAdfBlocks, findReplaceAdf, lossyReplaced, prependAdfBlocks, replaceAdfSection } from "./confluence-edit.js";
+export type { FindReplaceResult, SectionReplaceResult } from "./confluence-edit.js";
+export {
+  CONFLUENCE_SHORT_EXCERPT,
+  CONFLUENCE_SIZE_GUARD,
+  buildConfluenceCql,
+  cleanSearchText,
+  cursorFrom,
+  cutExcerpt,
+  prepareConfluenceBody,
+} from "./confluence-support.js";
 export type { AdfDocument, AdfNode } from "./adf.js";
 export { guessContentType } from "./content-type.js";
 export {
@@ -50,7 +71,24 @@ export type {
   ConfluenceAttachment,
   ConfluenceAttachmentUploadInput,
   ConfluenceAttachmentUploadResult,
+  ConfluenceBodyFormat,
+  ConfluenceBodyInput,
+  ConfluenceEditOperation,
+  ConfluenceOutline,
   ConfluencePage,
+  ConfluencePageContent,
+  ConfluencePageCreateInput,
+  ConfluencePageCreateResult,
+  ConfluencePageEditInput,
+  ConfluencePageEditOptions,
+  ConfluencePageEditResult,
+  ConfluencePageGetOptions,
+  ConfluenceSearchField,
+  ConfluenceSearchHit,
+  ConfluenceSearchOptions,
+  ConfluenceSearchResult,
+  ConfluenceSpace,
+  ConfluenceSpaceRef,
   CreateJiraSprintInput,
   JiraApproximateCount,
   JiraAttachment,
@@ -112,6 +150,10 @@ export {
   ConfluenceAttachmentSchema,
   ConfluenceAttachmentUploadResultSchema,
   ConfluencePageSchema,
+  ConfluenceSearchPageSchema,
+  ConfluenceSpaceSchema,
+  CONFLUENCE_SEARCH_DEFAULT_FIELDS,
+  CONFLUENCE_SEARCH_FIELDS,
   DEFAULT_JIRA_STORY_POINTS_FIELD,
   JiraApproximateCountSchema,
   JiraAttachmentListSchema,

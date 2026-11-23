@@ -11,8 +11,9 @@ export class AtlassianError extends Error {
 }
 
 export class AtlassianAuthError extends AtlassianError {
-  constructor(message = "Authentication failed. Check ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN.") {
-    super(message, "AUTH_ERROR", 401);
+  /** `statusCode` is 401 for bad credentials and 403 for valid credentials without permission. */
+  constructor(message = "Authentication failed. Check ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN.", statusCode = 401) {
+    super(message, "AUTH_ERROR", statusCode);
     this.name = "AtlassianAuthError";
   }
 }

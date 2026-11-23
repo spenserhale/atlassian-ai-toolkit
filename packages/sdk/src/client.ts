@@ -17,6 +17,12 @@ import {
   JiraSprintListSchema,
   JiraSprintSchema,
   JiraTransitionListSchema,
+  ConfluenceAncestorListSchema,
+  ConfluencePropertyListSchema,
+  ConfluenceSearchPageSchema,
+  ConfluenceSpaceListSchema,
+  ConfluenceSpaceSchema,
+  CONFLUENCE_SEARCH_DEFAULT_FIELDS,
 } from "./types.js";
 import type {
   AtlassianConfig,
@@ -58,8 +64,33 @@ import type {
   JiraTransitionSummary,
   MoveJiraSprintIssuesInput,
   UpdateJiraSprintInput,
+  ConfluencePageContent,
+  ConfluencePageCreateInput,
+  ConfluencePageCreateResult,
+  ConfluencePageEditInput,
+  ConfluencePageEditOptions,
+  ConfluencePageEditResult,
+  ConfluencePageGetOptions,
+  ConfluenceSearchOptions,
+  ConfluenceSearchResult,
+  ConfluenceSpace,
+  ConfluenceSpaceRef,
 } from "./types.js";
 import { guessContentType } from "./content-type.js";
+import type { AdfDocument } from "./adf.js";
+import { adfLossyIn, adfOutline, adfToMarkdown, findAdfSection, formatLossy } from "./adf-markdown.js";
+import type { ConfluenceLossyItem } from "./adf-markdown.js";
+import { appendAdfBlocks, findReplaceAdf, lossyReplaced, prependAdfBlocks, replaceAdfSection } from "./confluence-edit.js";
+import {
+  CONFLUENCE_SIZE_GUARD,
+  buildConfluenceCql,
+  cqlEscape,
+  cursorFrom,
+  parseAdfValue,
+  prepareConfluenceBody,
+  searchHit,
+  translateConfluenceCreateError,
+} from "./confluence-support.js";
 import { isJiraUserField, listMissingRequiredJiraFields, planJiraIssueFieldEdits, resolveJiraField } from "./jira-fields.js";
 import { jiraTransitionScreen, resolveJiraTransition, summarizeJiraTransition } from "./jira-transitions.js";
 import {
@@ -215,6 +246,7 @@ export class AtlassianClient {
    */
   private readonly issueTypeCache = new Map<string, CacheEntry<JiraCreateMetaIssueType[]>>();
   private readonly createMetaCache = new Map<string, CacheEntry<JiraIssueEditMeta>>();
+  private readonly spaceCache = new Map<string, ConfluenceSpace>();
 
   constructor(config: Partial<AtlassianConfig> & { siteUrl: string; email: string; apiToken: string }) {
     this.config = AtlassianConfigSchema.parse(config);
@@ -266,7 +298,7 @@ export class AtlassianClient {
       : `HTTP ${res.status}`;
     const code = parsed.success ? parsed.data.code ?? String(res.status) : "UNKNOWN";
 
-    if (res.status === 401 || res.status === 403) throw new AtlassianAuthError(message);
+    if (res.status === 401 || res.status === 403) throw new AtlassianAuthError(message, res.status);
     if (res.status === 404) throw new AtlassianNotFoundError(message);
     if (res.status === 429) {
       const retryAfter = Number(res.headers.get("Retry-After")) || undefined;
@@ -887,5 +919,490 @@ export class AtlassianClient {
       }
     );
     return ConfluenceAttachmentUploadResultSchema.parse(data);
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Confluence pages
+
+  private confluencePageUrl(page: ConfluencePage): string | undefined {
+    const webui = page._links?.webui;
+    if (webui === undefined) return undefined;
+    const base = page._links?.base ?? new URL("/wiki", this.config.siteUrl).toString();
+    return `${base.replace(/\/$/, "")}${webui}`;
+  }
+
+  private async readConfluencePage(pageId: string, opts: { bodyFormat?: "storage" | "atlas_doc_format"; draft?: boolean } = {}): Promise<ConfluencePage> {
+    const data = await this.request<unknown>("GET", `/wiki/api/v2/pages/${encodeURIComponent(requireNonEmpty(pageId, "pageId"))}`, {
+      query: { "body-format": opts.bodyFormat, "get-draft": opts.draft === true ? true : undefined },
+    });
+    return ConfluencePageSchema.parse(data);
+  }
+
+  private async getConfluenceSpaceById(spaceId: string): Promise<ConfluenceSpace> {
+    const cached = this.spaceCache.get(spaceId);
+    if (cached !== undefined) return cached;
+    const space = ConfluenceSpaceSchema.parse(await this.request<unknown>("GET", `/wiki/api/v2/spaces/${encodeURIComponent(spaceId)}`));
+    this.spaceCache.set(space.id, space);
+    return space;
+  }
+
+  /** The space key for display; a lookup failure leaves it out rather than failing the read. */
+  private async confluenceSpaceRef(spaceId: string | undefined): Promise<ConfluenceSpaceRef> {
+    if (spaceId === undefined) return { id: "" };
+    try {
+      return { id: spaceId, key: (await this.getConfluenceSpaceById(spaceId)).key };
+    } catch {
+      return { id: spaceId };
+    }
+  }
+
+  /** Resolves a space key or numeric id. Fails with `space_not_found` when it matches no visible space. */
+  private async resolveConfluenceSpace(input: string): Promise<ConfluenceSpace> {
+    const wanted = requireNonEmpty(input, "space");
+    if (/^\d+$/.test(wanted)) {
+      try {
+        return await this.getConfluenceSpaceById(wanted);
+      } catch (err) {
+        if (err instanceof AtlassianNotFoundError) throw new AtlassianFieldError(`Space ${wanted} does not exist or is not visible to you`, "space_not_found", { space: wanted });
+        throw err;
+      }
+    }
+    const list = ConfluenceSpaceListSchema.parse(await this.request<unknown>("GET", "/wiki/api/v2/spaces", { query: { keys: wanted } }));
+    const space = list.results.find((candidate) => candidate.key.toLowerCase() === wanted.toLowerCase());
+    if (space === undefined) throw new AtlassianFieldError(`Space ${wanted} does not exist or is not visible to you`, "space_not_found", { space: wanted });
+    this.spaceCache.set(space.id, space);
+    return space;
+  }
+
+  /**
+   * Reads a page with its body. Markdown (the default) is converted from ADF, with placeholders and
+   * a `lossy` report for content markdown cannot carry. Over `maxChars` (12,000) the body is replaced
+   * by the outline unless `full` is set. `sections` returns only the named sections.
+   */
+  async getConfluencePageContent(pageId: string, opts: ConfluencePageGetOptions = {}): Promise<ConfluencePageContent> {
+    const format = opts.format ?? "markdown";
+    if (format === "storage" && (opts.outline === true || (opts.sections?.length ?? 0) > 0)) {
+      throw new AtlassianFieldError("Sections and the outline need --format markdown or adf; storage is returned whole", "invalid_request");
+    }
+    const page = await this.readConfluencePage(pageId, {
+      bodyFormat: opts.meta === true ? undefined : format === "storage" ? "storage" : "atlas_doc_format",
+      draft: opts.draft,
+    });
+    const base = {
+      id: page.id,
+      title: page.title ?? "",
+      space: await this.confluenceSpaceRef(page.spaceId),
+      status: page.status ?? "current",
+      version: page.version?.number ?? 0,
+      ...(page.parentId ? { parentId: page.parentId } : {}),
+      ...(this.confluencePageUrl(page) !== undefined ? { url: this.confluencePageUrl(page) } : {}),
+      format,
+    };
+    if (opts.meta === true) return { ...base, lossy: [] };
+
+    if (format === "storage") {
+      const storage = page.body?.storage?.value ?? "";
+      return { ...base, body: storage, bodyChars: storage.length, lossy: [] };
+    }
+
+    const doc = parseAdfValue(page.body?.atlas_doc_format?.value);
+    const converted = adfToMarkdown(doc);
+    const bodyChars = format === "markdown" ? converted.markdown.length : JSON.stringify(doc).length;
+    const result = { ...base, bodyChars, lossy: converted.lossy };
+
+    if ((opts.sections?.length ?? 0) > 0) {
+      const sections = (opts.sections ?? []).map((selector) => {
+        const section = findAdfSection(doc, selector);
+        const nodes = section.container.slice(section.start, section.end);
+        const body = format === "markdown" ? adfToMarkdown(nodes).markdown : nodes;
+        return { selector: section.selector, chars: format === "markdown" ? String(body).length : JSON.stringify(body).length, body };
+      });
+      return { ...result, sections };
+    }
+    if (opts.outline === true) return { ...result, outline: adfOutline(doc) };
+
+    const threshold = opts.maxChars ?? CONFLUENCE_SIZE_GUARD;
+    if (opts.full !== true && bodyChars > threshold) {
+      return {
+        ...result,
+        outline: adfOutline(doc),
+        guard: { threshold, hint: `body is ${bodyChars.toLocaleString("en-US")} chars; use --section "<heading>" or --full` },
+      };
+    }
+    return { ...result, body: format === "markdown" ? converted.markdown : doc };
+  }
+
+  /**
+   * CQL search over v1 `/rest/api/search`. `text` is a shorthand for `siteSearch ~ "..."` narrowed by
+   * `space` and `type` (default `page`). Pages by cursor; `isLast` is false when more results exist.
+   */
+  async searchConfluence(opts: ConfluenceSearchOptions): Promise<ConfluenceSearchResult> {
+    const cql = buildConfluenceCql(opts);
+    const fields = opts.fields !== undefined && opts.fields.length > 0 ? opts.fields : CONFLUENCE_SEARCH_DEFAULT_FIELDS;
+    const excerptMode = opts.excerpt ?? "short";
+    const expand = ["content.space", ...(fields.includes("version") ? ["content.version"] : []), ...(fields.includes("ancestors") ? ["content.ancestors"] : [])];
+
+    let data: unknown;
+    try {
+      data = await this.request<unknown>("GET", "/wiki/rest/api/search", {
+        query: {
+          cql,
+          limit: opts.limit ?? 10,
+          cursor: opts.cursor,
+          excerpt: excerptMode === "none" ? "none" : "highlight",
+          expand: expand.join(","),
+        },
+      });
+    } catch (err) {
+      if (err instanceof AtlassianError && err.statusCode === 400) throw new AtlassianFieldError(`Confluence rejected the CQL: ${err.message}`, "invalid_cql", { cql });
+      throw err;
+    }
+
+    const page = ConfluenceSearchPageSchema.parse(data);
+    const base = (page._links?.base ?? new URL("/wiki", this.config.siteUrl).toString()).replace(/\/$/, "");
+    const results = page.results.map((hit) => searchHit(hit, fields, excerptMode, base));
+    const nextCursor = cursorFrom(page._links?.next);
+    return {
+      cql,
+      results,
+      count: results.length,
+      ...(page.totalSize !== undefined ? { total: page.totalSize } : {}),
+      isLast: nextCursor === undefined,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+    };
+  }
+
+  private async confluenceTitleExists(spaceKey: string, title: string): Promise<{ id?: string; url?: string } | undefined> {
+    const found = await this.searchConfluence({
+      cql: `space = "${cqlEscape(spaceKey)}" AND type = page AND title = "${cqlEscape(title)}"`,
+      limit: 5,
+      fields: ["id", "title", "url"],
+      excerpt: "none",
+    });
+    const hit = found.results.find((result) => result.title?.trim().toLowerCase() === title.trim().toLowerCase());
+    return hit === undefined ? undefined : { id: hit.id, url: hit.url };
+  }
+
+  private async confluenceAncestors(pageId: string): Promise<Array<{ id: string; title?: string }>> {
+    const data = await this.request<unknown>("GET", `/wiki/api/v2/pages/${encodeURIComponent(pageId)}/ancestors`, { query: { limit: 10 } });
+    const ancestors = ConfluenceAncestorListSchema.parse(data).results.filter((ancestor) => ancestor.type === undefined || ancestor.type === "page");
+    const out: Array<{ id: string; title?: string }> = [];
+    for (const ancestor of ancestors.slice(-10)) {
+      try {
+        out.push({ id: ancestor.id, title: (await this.readConfluencePage(ancestor.id)).title });
+      } catch {
+        out.push({ id: ancestor.id });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Creates a page under a parent (whose space it takes) or at the top of a space. A duplicate title
+   * in the space is caught before the write. `dryRun` resolves placement and the body without writing.
+   */
+  async createConfluencePage(input: ConfluencePageCreateInput, opts: { dryRun?: boolean } = {}): Promise<ConfluencePageCreateResult> {
+    const title = requireNonEmpty(input.title ?? "", "title").trim();
+    const body = prepareConfluenceBody(input.body);
+
+    let space: ConfluenceSpace;
+    let parent: { id: string; title?: string } | undefined;
+    if (input.parentId !== undefined && input.parentId.trim().length > 0) {
+      let parentPage: ConfluencePage;
+      try {
+        parentPage = await this.readConfluencePage(input.parentId.trim());
+      } catch (err) {
+        if (err instanceof AtlassianNotFoundError) {
+          throw new AtlassianFieldError(`Parent page ${input.parentId} is missing or not visible to you`, "parent_not_found", { parentId: input.parentId });
+        }
+        throw err;
+      }
+      if (parentPage.spaceId === undefined) throw new AtlassianFieldError(`Parent page ${input.parentId} reports no space`, "parent_not_found", { parentId: input.parentId });
+      space = await this.getConfluenceSpaceById(parentPage.spaceId);
+      parent = { id: parentPage.id, title: parentPage.title };
+    } else if (input.space !== undefined && input.space.trim().length > 0) {
+      space = await this.resolveConfluenceSpace(input.space);
+    } else {
+      throw new AtlassianFieldError("Provide a parent page or a space", "invalid_request");
+    }
+
+    const existing = await this.confluenceTitleExists(space.key, title);
+    if (existing !== undefined) {
+      throw new AtlassianFieldError(`A page titled "${title}" already exists in space ${space.key}`, "title_exists", { title, space: space.key, ...existing });
+    }
+
+    const plan = {
+      title,
+      pageStatus: input.draft === true ? "draft" : "current",
+      space: { id: space.id, key: space.key },
+      format: body.format,
+      bodyChars: body.chars,
+      ...(input.labels !== undefined && input.labels.length > 0 ? { labels: [...input.labels] } : {}),
+    };
+
+    if (opts.dryRun === true) {
+      return {
+        status: "dry_run",
+        ...plan,
+        ...(parent !== undefined ? { parent: { ...parent, ancestors: await this.confluenceAncestors(parent.id) } } : {}),
+      };
+    }
+
+    let created: ConfluencePage;
+    try {
+      created = ConfluencePageSchema.parse(
+        await this.request<unknown>("POST", "/wiki/api/v2/pages", {
+          body: {
+            spaceId: space.id,
+            status: plan.pageStatus,
+            title,
+            ...(parent !== undefined ? { parentId: parent.id } : {}),
+            body: { representation: body.representation, value: body.value },
+          },
+        })
+      );
+    } catch (err) {
+      throw translateConfluenceCreateError(err, title, space.key);
+    }
+
+    const result: ConfluencePageCreateResult = {
+      status: "created",
+      ...plan,
+      id: created.id,
+      version: created.version?.number ?? 1,
+      pageStatus: created.status ?? plan.pageStatus,
+      ...(this.confluencePageUrl(created) !== undefined ? { url: this.confluencePageUrl(created) } : {}),
+      ...(parent !== undefined ? { parent: { ...parent, ancestors: [] } } : {}),
+    };
+
+    if (input.labels !== undefined && input.labels.length > 0) {
+      try {
+        await this.request<unknown>("POST", `/wiki/rest/api/content/${encodeURIComponent(created.id)}/label`, {
+          body: input.labels.map((name) => ({ prefix: "global", name })),
+        });
+      } catch (err) {
+        // The page exists; reporting it with the failed labels stops a caller from creating it twice.
+        return { ...result, status: "created_with_errors", failedLabels: [...input.labels], labelError: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    return result;
+  }
+
+  /** True when an unpublished draft exists. A failure to check counts as no draft. */
+  private async confluenceDraftExists(pageId: string): Promise<boolean> {
+    try {
+      return (await this.readConfluencePage(pageId, { draft: true })).status === "draft";
+    } catch {
+      return false;
+    }
+  }
+
+  /** New-editor pages carry the `editor` content property set to `v2`. */
+  private async assertConfluenceNewEditor(pageId: string): Promise<void> {
+    const data = await this.request<unknown>("GET", `/wiki/api/v2/pages/${encodeURIComponent(pageId)}/properties`, { query: { key: "editor" } });
+    const property = ConfluencePropertyListSchema.parse(data).results.find((entry) => entry.key === "editor");
+    if (property?.value !== "v2") {
+      throw new AtlassianFieldError(
+        `Page ${pageId} uses the legacy editor; an ADF write would convert it. Replace the whole body with --format storage instead`,
+        "legacy_editor_page",
+        { pageId, editor: property?.value ?? null }
+      );
+    }
+  }
+
+  /**
+   * Edits a page. Targeted operations change only the affected ADF nodes; a whole-body replace needs
+   * `expectVersion`. A stale version fails with `version_conflict`; a markdown write that would drop
+   * content markdown cannot carry fails with `lossy_replace` unless `allowLossy` is set.
+   */
+  async editConfluencePage(pageId: string, input: ConfluencePageEditInput, opts: ConfluencePageEditOptions = {}): Promise<ConfluencePageEditResult> {
+    const operation = input.operation;
+    const title = input.title?.trim();
+    if (operation === undefined && (title === undefined || title.length === 0)) {
+      throw new AtlassianFieldError("Provide an edit: a section, append, prepend, find and replace, a body, or a title", "invalid_request");
+    }
+    if (operation?.kind === "replaceBody" && opts.expectVersion === undefined) {
+      throw new AtlassianFieldError("Replacing the whole body requires the version you read (--expect-version)", "expect_version_required");
+    }
+    const bodyOf = operation !== undefined && "body" in operation ? operation.body : undefined;
+    if (operation !== undefined && operation.kind !== "replaceBody" && bodyOf?.format === "storage") {
+      throw new AtlassianFieldError("Targeted edits take a markdown or ADF body; storage is accepted only for a whole-body replace", "invalid_request");
+    }
+
+    if (operation === undefined && opts.expectVersion === undefined && opts.message === undefined) {
+      return this.renameConfluencePage(pageId, title as string, opts);
+    }
+    return this.applyConfluenceEdit(pageId, input, opts, false);
+  }
+
+  private async renameConfluencePage(pageId: string, title: string, opts: ConfluencePageEditOptions): Promise<ConfluencePageEditResult> {
+    const page = await this.readConfluencePage(pageId);
+    const draft = await this.confluenceDraftExists(pageId);
+    const current = page.version?.number ?? 0;
+    const base = {
+      id: page.id,
+      title,
+      previousVersion: current,
+      operation: "title",
+      ...(draft ? { draft: "exists" as const } : {}),
+    };
+    if (opts.dryRun === true) return { ...base, status: "dry_run", version: current + 1, url: this.confluencePageUrl(page) };
+
+    const data = await this.request<unknown>("PUT", `/wiki/api/v2/pages/${encodeURIComponent(pageId)}/title`, { body: { status: page.status ?? "current", title } });
+    const updated = data === undefined ? page : ConfluencePageSchema.parse(data);
+    return { ...base, status: "updated", version: updated.version?.number ?? current + 1, url: this.confluencePageUrl(updated) ?? this.confluencePageUrl(page) };
+  }
+
+  private async applyConfluenceEdit(pageId: string, input: ConfluencePageEditInput, opts: ConfluencePageEditOptions, retried: boolean): Promise<ConfluencePageEditResult> {
+    const operation = input.operation;
+    const storageReplace = operation?.kind === "replaceBody" && operation.body.format === "storage";
+    const page = await this.readConfluencePage(pageId, { bodyFormat: storageReplace ? "storage" : "atlas_doc_format" });
+    const current = page.version?.number ?? 0;
+    if (opts.expectVersion !== undefined && opts.expectVersion !== current) {
+      throw new AtlassianFieldError(`Page ${pageId} is at version ${current}, not ${opts.expectVersion}; re-read it before editing`, "version_conflict", {
+        expected: opts.expectVersion,
+        current,
+      });
+    }
+    if (!storageReplace) await this.assertConfluenceNewEditor(pageId);
+    const draft = await this.confluenceDraftExists(pageId);
+
+    let representation: "atlas_doc_format" | "storage" = "atlas_doc_format";
+    let value: string;
+    let chars: { before: number; after: number };
+    let section: string | undefined;
+    let matches: number | undefined;
+    let lossy: ConfluenceLossyItem[] = [];
+
+    if (storageReplace && operation?.kind === "replaceBody") {
+      const body = prepareConfluenceBody(operation.body);
+      representation = "storage";
+      value = body.value;
+      chars = { before: (page.body?.storage?.value ?? "").length, after: body.value.length };
+    } else {
+      const doc = parseAdfValue(page.body?.atlas_doc_format?.value);
+      let next: AdfDocument = doc;
+      switch (operation?.kind) {
+        case undefined:
+          break;
+        case "replaceSection": {
+          const replaced = replaceAdfSection(doc, operation.section, prepareConfluenceBody(operation.body).blocks);
+          next = replaced.doc;
+          section = replaced.selector;
+          lossy = lossyReplaced(replaced.removed);
+          break;
+        }
+        case "append":
+          next = appendAdfBlocks(doc, prepareConfluenceBody(operation.body).blocks);
+          break;
+        case "prepend":
+          next = prependAdfBlocks(doc, prepareConfluenceBody(operation.body).blocks);
+          break;
+        case "findReplace": {
+          const replaced = findReplaceAdf(doc, operation.find, operation.replace, operation.all === true);
+          next = replaced.doc;
+          matches = replaced.matches;
+          break;
+        }
+        case "replaceBody": {
+          const body = prepareConfluenceBody(operation.body);
+          next = body.doc as AdfDocument;
+          if (body.format === "markdown") lossy = adfLossyIn(doc);
+          break;
+        }
+      }
+      if (lossy.length > 0 && opts.allowLossy !== true) {
+        throw new AtlassianFieldError(
+          `This edit would remove content markdown cannot carry: ${formatLossy(lossy)}. Edit around it, or pass --allow-lossy`,
+          "lossy_replace",
+          { lost: lossy.map((item) => ({ kind: item.kind, count: item.count, ...(item.details ? { details: item.details } : {}) })) }
+        );
+      }
+      value = JSON.stringify(next);
+      chars = { before: adfToMarkdown(doc).markdown.length, after: adfToMarkdown(next).markdown.length };
+    }
+
+    const title = input.title?.trim() || page.title || "";
+    const result = {
+      id: page.id,
+      title,
+      previousVersion: current,
+      operation: operation?.kind ?? "title",
+      chars,
+      ...(section !== undefined ? { section } : {}),
+      ...(matches !== undefined ? { matches } : {}),
+      ...(lossy.length > 0 ? { lossy: lossy.map((item) => ({ kind: item.kind, count: item.count })) } : {}),
+      ...(draft ? { draft: "exists" as const } : {}),
+      ...(retried ? { retried: true } : {}),
+    };
+    if (opts.dryRun === true) return { ...result, status: "dry_run", version: current + 1, url: this.confluencePageUrl(page) };
+
+    let data: unknown;
+    try {
+      data = await this.request<unknown>("PUT", `/wiki/api/v2/pages/${encodeURIComponent(pageId)}`, {
+        body: {
+          id: page.id,
+          status: page.status ?? "current",
+          title,
+          body: { representation, value },
+          version: { number: current + 1, ...(opts.message !== undefined ? { message: opts.message } : {}) },
+        },
+      });
+    } catch (err) {
+      const failure = await this.classifyConfluenceWriteFailure(pageId, current, err);
+      const retryable = operation === undefined || operation.kind === "append" || operation.kind === "prepend" || operation.kind === "findReplace";
+      if (failure.code === "version_conflict" && !retried && opts.expectVersion === undefined && retryable) {
+        return this.applyConfluenceEdit(pageId, input, opts, true);
+      }
+      throw failure;
+    }
+    const updated = data === undefined ? undefined : ConfluencePageSchema.safeParse(data);
+    const written = updated?.success === true ? updated.data : undefined;
+    return {
+      ...result,
+      status: "updated",
+      version: written?.version?.number ?? current + 1,
+      url: (written !== undefined ? this.confluencePageUrl(written) : undefined) ?? this.confluencePageUrl(page),
+    };
+  }
+
+  /**
+   * Sorts a failed page write into what the caller can act on. A 409 (or a 400 naming the version)
+   * is a conflict only if the page actually moved on; otherwise it is the approval workflow or a
+   * plain rejection. A network failure after sending means the outcome is unknown.
+   */
+  private async classifyConfluenceWriteFailure(pageId: string, readVersion: number, err: unknown): Promise<AtlassianFieldError> {
+    if (!(err instanceof AtlassianError)) {
+      return new AtlassianFieldError(
+        `The write may or may not have reached Confluence: ${err instanceof Error ? err.message : String(err)}`,
+        "write_outcome_unknown",
+        { hint: `Re-read the page (version was ${readVersion}) before retrying` }
+      );
+    }
+    const message = err.message;
+    const suspicious = err.statusCode === 409 || (err.statusCode === 400 && /version/i.test(message));
+    if (!suspicious) {
+      if (err instanceof AtlassianFieldError) return err;
+      const code = err instanceof AtlassianAuthError ? (err.statusCode === 403 ? "permission_denied" : "auth_error") : err instanceof AtlassianNotFoundError ? "not_found" : "write_rejected";
+      return new AtlassianFieldError(message, code, err.details);
+    }
+    let current: number | undefined;
+    try {
+      current = (await this.readConfluencePage(pageId)).version?.number;
+    } catch {
+      current = undefined;
+    }
+    if (current !== undefined && current > readVersion) {
+      return new AtlassianFieldError(`Page ${pageId} changed while editing (version ${readVersion} -> ${current})`, "version_conflict", {
+        expected: readVersion,
+        current,
+      });
+    }
+    if (/approv/i.test(message)) {
+      return new AtlassianFieldError(`The space requires approval before publishing: ${message}`, "approval_required", {
+        hint: "Save the change as a draft and complete the approval workflow in Confluence",
+      });
+    }
+    return new AtlassianFieldError(`Confluence rejected the write: ${message}`, "write_rejected", err.details);
   }
 }
