@@ -9,6 +9,7 @@ import { jiraEditCommand } from "./commands/jira-edit.js";
 import { jiraGetCommand } from "./commands/jira-get.js";
 import { jiraSearchCommand } from "./commands/jira-search.js";
 import { jiraSprintRoutes } from "./commands/jira-sprint.js";
+import { jiraTransitionCommand } from "./commands/jira-transition.js";
 import { authRoutes } from "./commands/auth/index.js";
 import { configRoutes } from "./commands/config-show.js";
 import { upgradeCommand } from "./commands/upgrade.js";
@@ -23,6 +24,7 @@ const jiraRoutes = buildRouteMap({
     edit: jiraEditCommand,
     search: jiraSearchCommand,
     sprint: jiraSprintRoutes,
+    transition: jiraTransitionCommand,
   },
   docs: {
     brief: "Manage Jira issues",

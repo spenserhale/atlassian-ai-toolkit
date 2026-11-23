@@ -182,6 +182,40 @@ comes back with the issue's settable fields in the error details:
 Editing is reversible from the issue history, so no `--force --confirm` gate applies; `--dry-run`
 validates the payload against the edit screen without sending it.
 
+## Transitioning Issues
+
+Move an issue to another status without leaving the CLI. With no `--to`, the command lists the
+transitions available from the issue's current status, each with its target status and the fields on
+its transition screen (`*` marks required).
+
+```sh
+# What can this issue move to?
+atlassian jira transition DMP-2431
+# issue: DMP-2431
+# transitions:
+# - 11  Start Progress  -> In Progress [In Progress]
+# - 31  Close  -> Done [Done]
+#     fields: customfield_13841 (Task Category), resolution (Resolution)*
+
+# Preview the move and the resolved screen payload
+atlassian jira transition DMP-2431 --to Done --field resolution=Done --field "Task Category=Support" --dry-run --json
+
+# Close it
+atlassian jira transition DMP-2431 --to Done --field resolution=Done
+```
+
+`--to` takes a transition id, a transition name, or a target status name, matched case-insensitively
+in that order, so `--to Done` works whether the workflow calls the move "Done", "Close", or
+"Resolve". If nothing matches, the command fails with `transition_not_available` and lists the valid
+transitions; if two transitions lead to the same status, it fails with `transition_ambiguous` and
+asks for the id.
+
+`--field` uses the same `<id|name>=<value>` resolution and value coercion as `jira edit`, but against
+the transition screen: only fields on that screen can be set during the move. A field that is not on
+the screen fails with `field_not_settable` and the screen's fields in the error details. To set it,
+run `jira edit` first and then transition. A transition is reversible through the workflow, so no
+`--force --confirm` gate applies.
+
 ## Searching And Sprint Reporting
 
 `jira search --json` reports `total`, `isLast`, and `startAt` alongside the issues, so a truncated
